@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · WealthGate</title>
+<link rel="icon" href="/assets/covasant-logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { min-height: 100vh; }
+  .auth { display: grid; grid-template-columns: 1.05fr .95fr; min-height: 100vh; }
+
+  /* ---------------------------------------------------------- brand side */
+  .auth .brandside {
+    background: var(--brand); color: #fff; padding: 56px 60px;
+    display: flex; flex-direction: column; position: relative; overflow: hidden;
+  }
+  .auth .brandside::after {
+    content: ""; position: absolute; right: -160px; bottom: -200px;
+    width: 520px; height: 520px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, rgba(32,72,213,.55), transparent 62%);
+    pointer-events: none;
+  }
+  .auth .brandside::before {
+    content: ""; position: absolute; left: -120px; top: -140px;
+    width: 380px; height: 380px; border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(219,255,116,.14), transparent 65%);
+    pointer-events: none;
+  }
+  .auth .brandside img { height: 30px; filter: brightness(0) invert(1); align-self: flex-start; }
+  /* auto top AND bottom centres the pitch in the space left under the logo */
+  .auth .pitch { margin: auto 0; position: relative; z-index: 1; }
+  .auth .pitch h2 {
+    font-size: 30px; line-height: 1.25; margin: 0 0 14px;
+    font-weight: 650; letter-spacing: -.5px; max-width: 15ch;
+  }
+  .auth .pitch p { color: #AFBCE8; font-size: 14px; max-width: 46ch; margin: 0; line-height: 1.65; }
+  .auth .facts { display: flex; gap: 34px; margin-top: 36px; position: relative; z-index: 1; }
+  .auth .facts div span { display: block; font-size: 23px; font-weight: 700; letter-spacing: -.4px; }
+  .auth .facts div small { color: #8E9DD4; font-size: 11.5px; letter-spacing: .3px; }
+  .auth .legal {
+    margin-top: 40px; color: #7F8DC4; font-size: 11px; position: relative; z-index: 1;
+  }
+
+  /* ----------------------------------------------------------- form side */
+  .auth .formside {
+    background: var(--panel); display: grid; place-items: center; padding: 40px 32px;
+  }
+  .auth form { width: 100%; max-width: 370px; }
+  .auth h1 { font-size: 23px; margin: 0 0 6px; letter-spacing: -.3px; }
+  .auth .lead { color: var(--dim); font-size: 13px; margin-bottom: 28px; }
+  .auth .fld { margin-bottom: 16px; }
+  .auth .fld label {
+    display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
+    font-weight: 600; color: var(--dim); margin-bottom: 6px;
+  }
+  .auth input[type=text], .auth input[type=password] {
+    width: 100%; padding: 11px 12px; font-size: 14px; border-radius: 8px;
+    border: 1px solid var(--line2); background: var(--panel); color: var(--fg);
+  }
+  .auth .pw { position: relative; }
+  .auth .pw input { padding-right: 62px; }
+  .auth .pw button {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    border: none; background: none; color: var(--dim); font: inherit; font-size: 11.5px;
+    cursor: pointer; padding: 6px 8px; border-radius: 6px; font-weight: 600;
+  }
+  .auth .pw button:hover { color: var(--volt); background: var(--volt-soft); }
+  .auth .submit {
+    width: 100%; margin-top: 10px; padding: 12px; font-size: 14px; font-weight: 600;
+  }
+  .auth .submit[aria-busy="true"] { opacity: .7; pointer-events: none; }
+  .auth .err { margin-bottom: 16px; display: none; }
+  .auth .err.show { display: block; }
+  .auth .foot {
+    margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-size: 11.5px; color: var(--dim); line-height: 1.7;
+  }
+  .auth .themetoggle { position: absolute; top: 20px; right: 20px; }
+
+  @media (max-width: 900px) {
+    .auth { grid-template-columns: 1fr; }
+    .auth .brandside { padding: 34px 28px; min-height: auto; }
+    .auth .pitch { margin-top: 28px; }
+    .auth .pitch h2 { font-size: 23px; max-width: none; }
+    .auth .facts { gap: 24px; margin-top: 22px; }
+    .auth .legal { margin-top: 24px; }
+    .auth .formside { padding: 36px 24px 56px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="auth">
+  <section class="brandside">
+    <img src="/assets/covasant-logo.svg" alt="Covasant">
+    <div class="pitch">
+      <h2>Onboarding &amp; KYC, end to end.</h2>
+      <p>PAN and KRA verification, CKYC download, FATCA/CRS, penny-drop,
+         AML screening, in-person verification and eSign — one workspace from
+         first contact to an activated account.</p>
+      <div class="facts">
+        <div><span>KRA</span><small>CKYC &middot; DIGILOCKER</small></div>
+        <div><span>AML</span><small>UN &middot; OFAC &middot; PEP</small></div>
+        <div><span>eSign</span><small>AADHAAR &middot; VIPV</small></div>
+      </div>
+      <div class="legal">
+        WealthGate · PMS &middot; AIF &middot; Advisory<br>
+        Authorised use only. Sign-in activity is recorded.
+      </div>
+    </div>
+  </section>
+
+  <section class="formside">
+    <button class="icon-btn themetoggle" id="themeBtn" title="Toggle light / dark">◐</button>
+    <form id="f" autocomplete="on" novalidate>
+      <h1>Sign in</h1>
+      <div class="lead">Use your WealthGate console account.</div>
+
+      <div class="banner bad err" id="err" role="alert"></div>
+
+      <div class="fld">
+        <label for="u">Username</label>
+        <input type="text" id="u" name="username" autocomplete="username"
+               autocapitalize="none" spellcheck="false" required autofocus>
+      </div>
+
+      <div class="fld">
+        <label for="p">Password</label>
+        <div class="pw">
+          <input type="password" id="p" name="password" autocomplete="current-password" required>
+          <button type="button" id="toggle" tabindex="-1">Show</button>
+        </div>
+      </div>
+
+      <button class="btn pri submit" type="submit" id="go">Sign in</button>
+
+      <div class="foot">
+        Trouble signing in? Contact your platform administrator.<br>
+        Accounts lock for 15 minutes after 5 failed attempts.
+      </div>
+    </form>
+  </section>
+</div>
+
+<script src="/login.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "python.analysis.extraPaths": ["."],
+  "files.exclude": { "**/__pycache__": true },
+  "search.exclude": { "**/backend/data/*.xlsx": true },
+  "[python]": { "editor.tabSize": 4 },
+  "[javascript]": { "editor.tabSize": 2 },
+  "[css]": { "editor.tabSize": 2 },
+  "[html]": { "editor.tabSize": 2 }
+}

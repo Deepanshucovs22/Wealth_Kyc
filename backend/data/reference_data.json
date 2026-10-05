@@ -1,0 +1,101 @@
+{
+  "client_types": [
+    "Individual - Resident",
+    "Individual - NRI",
+    "HUF",
+    "Private Ltd / LLP",
+    "Trust"
+  ],
+  "onboarding_stages": [
+    "Draft",
+    "KYC Fetch",
+    "Documents Pending",
+    "IPV Pending",
+    "Screening",
+    "Compliance Review",
+    "eSign Pending",
+    "Account Activated",
+    "Rejected",
+    "On Hold"
+  ],
+  "kra_status_codes": {
+    "KYC Registered": "Exists, not yet validated",
+    "KYC Validated": "Validated against Aadhaar/officially valid docs",
+    "Not Found": "Fresh KYC required",
+    "On Hold": "KRA flagged discrepancy",
+    "Rejected": "KRA rejected"
+  },
+  "products": [
+    {
+      "code": "PMS-DISC",
+      "name": "PMS - Discretionary",
+      "min_investment_inr": 5000000
+    },
+    {
+      "code": "PMS-NDISC",
+      "name": "PMS - Non-Discretionary",
+      "min_investment_inr": 5000000
+    },
+    {
+      "code": "AIF-CAT3",
+      "name": "AIF Cat III - Long/Short",
+      "min_investment_inr": 10000000
+    },
+    {
+      "code": "AIF-CAT2",
+      "name": "AIF Cat II - Private Credit",
+      "min_investment_inr": 10000000
+    },
+    {
+      "code": "ADV",
+      "name": "Investment Advisory (RIA)",
+      "min_investment_inr": 2500000
+    }
+  ],
+  "risk_categories": [
+    "Conservative",
+    "Moderate",
+    "Moderately Aggressive",
+    "Aggressive"
+  ],
+  "screening_lists": [
+    "UN Sanctions (UNSC 1267)",
+    "OFAC SDN",
+    "MHA Banned Orgs",
+    "SEBI Debarred",
+    "PEP Database",
+    "Adverse Media"
+  ],
+  "relationship_managers": [
+    {
+      "rm_id": "RM001",
+      "name": "Kavita Rao",
+      "branch": "Mumbai"
+    },
+    {
+      "rm_id": "RM002",
+      "name": "Arvind Menon",
+      "branch": "Bengaluru"
+    },
+    {
+      "rm_id": "RM003",
+      "name": "Sonal Mehta",
+      "branch": "New Delhi"
+    },
+    {
+      "rm_id": "RM004",
+      "name": "Rakesh Iyer",
+      "branch": "Chennai"
+    },
+    {
+      "rm_id": "RM005",
+      "name": "Neeraj Kapoor",
+      "branch": "Gurugram"
+    },
+    {
+      "rm_id": "RM006",
+      "name": "Pallavi Shah",
+      "branch": "Ahmedabad"
+    }
+  ]
+}

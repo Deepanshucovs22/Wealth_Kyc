@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WealthGate · Onboarding &amp; KYC — Covasant</title>
+<link rel="icon" href="/assets/covasant-logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="top">
+  <a class="logo" href="#" onclick="go('dash');return false">
+    <img src="/assets/covasant-logo.svg" alt="Covasant">
+    <span class="divider"></span>
+    <span class="product">Wealth<span>Gate</span> · Onboarding</span>
+  </a>
+  <input class="search" id="gs" placeholder="Search client name, PAN, application ID…" autocomplete="off">
+  <button class="icon-btn" id="themeBtn" title="Toggle light / dark">◐</button>
+
+  <div class="usermenu" id="usermenu">
+    <button class="usertrigger" id="userBtn" aria-haspopup="menu" aria-expanded="false">
+      <span class="avatar" id="userInitials">··</span>
+      <span class="who">
+        <span class="nm" id="userName">…</span>
+        <span class="rl" id="userRole"></span>
+      </span>
+      <span class="caret">▾</span>
+    </button>
+    <div class="dropdown" id="userDrop" role="menu" hidden>
+      <div class="head">
+        <div class="nm" id="dropName"></div>
+        <div class="em" id="dropEmail"></div>
+        <div class="meta" id="dropMeta"></div>
+      </div>
+      <button class="item danger" id="signout" role="menuitem">Sign out</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <nav id="nav"></nav>
+  <main id="main"></main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "WealthGate — run server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["backend.app:app", "--host", "127.0.0.1", "--port", "8010", "--reload"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "WealthGate — load Excel into PostgreSQL",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/etl/load_excel_to_pg.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}

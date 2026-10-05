@@ -1,0 +1,908 @@
+[
+  {
+    "group": "Auth",
+    "method": "POST",
+    "path": "/oauth2/token",
+    "summary": "Get access token",
+    "description": "OAuth 2.0 client-credentials grant for partner/system integrations; RM/ops users use OIDC SSO. Tokens are scoped (onboarding:write, kyc:read, screening:write, accounts:write) and expire in 3600s.",
+    "request": {
+      "grant_type": "client_credentials",
+      "client_id": "partner_demo_01",
+      "client_secret": "••••••",
+      "scope": "onboarding:write kyc:read"
+    },
+    "response": {
+      "access_token": "eyJhbGciOiJSUzI1NiIs...",
+      "token_type": "Bearer",
+      "expires_in": 3600,
+      "scope": "onboarding:write kyc:read"
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Onboarding Applications",
+    "method": "POST",
+    "path": "/v1/onboarding/applications",
+    "summary": "Create onboarding application",
+    "description": "Starts a new account-opening application for a prospect. Returns an application_id and the checklist of required steps/documents derived from client_type, residential status and selected product. Idempotent with the Idempotency-Key header.",
+    "request": {
+      "client_type": "Individual - Resident",
+      "pan": "PSNPS8976O",
+      "name": "Kiran Sheikh",
+      "date_of_birth": "1964-04-12",
+      "mobile": "+91 8679984033",
+      "email": "kiran.sheikh43@example.com",
+      "product_code": "PMS-NDISC",
+      "strategy": "Custom Equity",
+      "rm_id": "RM004",
+      "channel": "Family Office Referral"
+    },
+    "response": {
+      "application_id": "APP2600004",
+      "client_id": "CL000004",
+      "status": "Draft",
+      "required_steps": [
+        "KYC_FETCH",
+        "PERSONAL_DETAILS",
+        "FATCA_CRS",
+        "BANK",
+        "DEMAT",
+        "NOMINEE",
+        "RISK_PROFILE",
+        "DOCUMENTS",
+        "IPV",
+        "SCREENING",
+        "AGREEMENT_ESIGN"
+      ],
+      "required_documents": [
+        "PAN Card",
+        "Proof of Address",
+        "Photograph",
+        "Signature Specimen",
+        "Cancelled Cheque / Bank Statement",
+        "Income Proof",
+        "FATCA/CRS Self-Certification",
+        "Client Agreement"
+      ],
+      "created_at": "2026-09-04T16:28"
+    },
+    "downstream": "—",
+    "success_status": 201,
+    "params": []
+  },
+  {
+    "group": "Onboarding Applications",
+    "method": "GET",
+    "path": "/v1/onboarding/applications",
+    "summary": "List / search applications",
+    "description": "Paginated work-queue view for RMs and Ops. Filter by stage, rm_id, client_type, aml_risk_rating, created date range. Supports cursor pagination.",
+    "request": null,
+    "response": {
+      "data": [
+        {
+          "application_id": "APP2600004",
+          "client_id": "CL000004",
+          "name": "Kiran Sheikh",
+          "stage": "Account Activated",
+          "rm_name": "Rakesh Iyer",
+          "aml_risk_rating": "Low",
+          "last_updated_at": "2026-09-17T16:28"
+        }
+      ],
+      "next_cursor": "eyJvZmZzZXQiOjUwfQ==",
+      "total": 240
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": [
+      "stage",
+      "rm_id",
+      "client_type",
+      "aml_risk_rating",
+      "from",
+      "to",
+      "cursor",
+      "limit"
+    ]
+  },
+  {
+    "group": "Onboarding Applications",
+    "method": "GET",
+    "path": "/v1/onboarding/applications/{application_id}",
+    "summary": "Get application",
+    "description": "Full application aggregate: client profile, step completion, documents, screening outcome, open exceptions and audit trail pointer.",
+    "request": null,
+    "response": {
+      "application_id": "APP2600004",
+      "client": {
+        "client_id": "CL000004",
+        "name": "Kiran Sheikh",
+        "client_type": "Individual - Resident",
+        "pan": "PSNPS8976O",
+        "kra_status": "KYC Validated",
+        "ckyc_number": "42999460928241",
+        "residential_status": "Resident Individual",
+        "risk_category": "Conservative",
+        "aml_risk_rating": "Low"
+      },
+      "stage": "Account Activated",
+      "steps_completed": 11,
+      "steps_total": 11,
+      "open_exceptions": []
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Onboarding Applications",
+    "method": "PATCH",
+    "path": "/v1/onboarding/applications/{application_id}",
+    "summary": "Update application sections",
+    "description": "Partial update of personal, address, contact, occupation/income or product sections (JSON Merge Patch). Each section is re-validated; fields pre-filled from KRA/CKYC are locked unless override_reason is supplied.",
+    "request": {
+      "address": {
+        "line1": "711, Lake Side Towers",
+        "line2": "Linking Road",
+        "city": "Bengaluru",
+        "state": "Karnataka",
+        "pincode": "560054",
+        "country": "India"
+      },
+      "occupation": "Business Owner",
+      "annual_income_band": "5-10 Cr",
+      "source_of_wealth": "Business Income"
+    },
+    "response": {
+      "application_id": "APP2600004",
+      "updated_sections": [
+        "address",
+        "occupation"
+      ],
+      "validation_errors": []
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Onboarding Applications",
+    "method": "POST",
+    "path": "/v1/onboarding/applications/{application_id}/submit",
+    "summary": "Submit for compliance review",
+    "description": "Locks the application and moves it to Compliance Review once all mandatory steps pass. Returns blocking checks if anything is missing.",
+    "request": {
+      "submitted_by": "RM004",
+      "declaration_accepted": true
+    },
+    "response": {
+      "application_id": "APP2600004",
+      "stage": "Compliance Review",
+      "blocking_checks": [],
+      "sla_due_at": "2026-09-12T18:00"
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Onboarding Applications",
+    "method": "POST",
+    "path": "/v1/onboarding/applications/{application_id}/decision",
+    "summary": "Compliance decision",
+    "description": "Maker-checker action by Compliance: APPROVE, REJECT, HOLD or SEND_BACK with reason codes. APPROVE triggers agreement generation and eSign.",
+    "request": {
+      "decision": "APPROVE",
+      "reason_code": null,
+      "remarks": "CDD complete, low risk",
+      "checker_id": "CMP-ASHA"
+    },
+    "response": {
+      "application_id": "APP2600004",
+      "stage": "eSign Pending",
+      "decision_id": "DEC-2026-004512"
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Onboarding Applications",
+    "method": "GET",
+    "path": "/v1/onboarding/applications/{application_id}/timeline",
+    "summary": "Application audit timeline",
+    "description": "Immutable, time-ordered stage transitions and user actions for audit (SEBI record-keeping).",
+    "request": null,
+    "response": {
+      "events": [
+        {
+          "stage": "Draft",
+          "action": "Entered stage",
+          "actor": "Rakesh Iyer",
+          "timestamp": "2026-09-04T16:28"
+        },
+        {
+          "stage": "KYC Fetch",
+          "action": "Entered stage",
+          "actor": "System",
+          "timestamp": "2026-09-05T04:28"
+        },
+        {
+          "stage": "Documents Pending",
+          "action": "Entered stage",
+          "actor": "Rakesh Iyer",
+          "timestamp": "2026-09-06T01:28"
+        },
+        {
+          "stage": "IPV Pending",
+          "action": "Entered stage",
+          "actor": "System",
+          "timestamp": "2026-09-06T09:28"
+        }
+      ]
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "KYC Registry",
+    "method": "GET",
+    "path": "/v1/kyc/kra/{pan}",
+    "summary": "KRA status & fetch",
+    "description": "Queries the KYC Registration Agency (CVL/NDML/CAMS/KFin/DOTEX) for PAN status; when Registered/Validated, returns KYC data for pre-fill. Fresh KYC is triggered when status is Not Found.",
+    "request": null,
+    "response": {
+      "pan": "PSNPS8976O",
+      "kra": "CAMS KRA",
+      "kra_status": "KYC Validated",
+      "name": "Kiran Sheikh",
+      "dob": "1964-04-12",
+      "address": {
+        "city": "Bengaluru",
+        "pincode": "560054"
+      },
+      "last_modified": "2024-03-11"
+    },
+    "downstream": "KRA Gateway",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "KYC Registry",
+    "method": "POST",
+    "path": "/v1/kyc/kra/upload",
+    "summary": "Upload / modify KYC to KRA",
+    "description": "Pushes fresh or modified KYC record (with IPV and documents) to the KRA after verification. Async; status via webhook kyc.kra_status_changed.",
+    "request": {
+      "application_id": "APP2600004",
+      "pan": "PSNPS8976O",
+      "action": "MODIFY",
+      "ipv_ref": "IPV-77812"
+    },
+    "response": {
+      "submission_id": "KRAUP-990214",
+      "status": "Submitted"
+    },
+    "downstream": "KRA Gateway",
+    "success_status": 202,
+    "params": []
+  },
+  {
+    "group": "KYC Registry",
+    "method": "GET",
+    "path": "/v1/kyc/ckyc/search",
+    "summary": "CKYC search",
+    "description": "Searches CERSAI Central KYC Registry by PAN/ID to retrieve CKYC number (KIN).",
+    "request": null,
+    "response": {
+      "pan": "PSNPS8976O",
+      "ckyc_number": "42999460928241",
+      "found": true
+    },
+    "downstream": "CKYC (CERSAI)",
+    "success_status": 200,
+    "params": [
+      "id_type",
+      "id_value"
+    ]
+  },
+  {
+    "group": "KYC Registry",
+    "method": "POST",
+    "path": "/v1/kyc/ckyc/download",
+    "summary": "CKYC download",
+    "description": "Downloads the CKYC record (photo, identity and address details) using KIN plus DOB for pre-fill and verification.",
+    "request": {
+      "ckyc_number": "42999460928241",
+      "dob": "1964-04-12"
+    },
+    "response": {
+      "ckyc_number": "42999460928241",
+      "name": "Kiran Sheikh",
+      "photo_ref": "blob://ckyc/photo/CL000004",
+      "address_proof_type": "Aadhaar (masked)"
+    },
+    "downstream": "CKYC (CERSAI)",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "KYC Registry",
+    "method": "POST",
+    "path": "/v1/kyc/digilocker/consent",
+    "summary": "DigiLocker consent link",
+    "description": "Creates a consent session for the client to share PAN and Aadhaar XML/address documents from DigiLocker.",
+    "request": {
+      "application_id": "APP2600004",
+      "documents": [
+        "PAN",
+        "AADHAAR"
+      ],
+      "redirect_url": "https://app.example.com/onboarding/return"
+    },
+    "response": {
+      "consent_id": "DLC-55102",
+      "consent_url": "https://digilocker.example/consent/DLC-55102",
+      "expires_in": 900
+    },
+    "downstream": "DigiLocker",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Verification",
+    "method": "POST",
+    "path": "/v1/verification/pan",
+    "summary": "Verify PAN",
+    "description": "Validates PAN with the ITD/Protean service: existence, name match, DOB match and Aadhaar-seeding status.",
+    "request": {
+      "pan": "PSNPS8976O",
+      "name": "Kiran Sheikh",
+      "dob": "1964-04-12"
+    },
+    "response": {
+      "pan": "PSNPS8976O",
+      "valid": true,
+      "name_match": true,
+      "dob_match": true,
+      "aadhaar_seeded": true,
+      "category": "Individual"
+    },
+    "downstream": "NSDL/Protean PAN",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Verification",
+    "method": "POST",
+    "path": "/v1/verification/bank-account",
+    "summary": "Bank account verification (penny drop)",
+    "description": "Performs ₹1 IMPS penny-drop (or penny-less) verification and returns beneficiary name with fuzzy name-match score against KYC name.",
+    "request": {
+      "application_id": "APP2600004",
+      "account_number": "XXXXXXXX1186",
+      "ifsc": "YESB0054921",
+      "account_type": "Savings"
+    },
+    "response": {
+      "bank_link_id": "BK000006",
+      "status": "Verified",
+      "beneficiary_name": "KIRAN SHEIKH",
+      "name_match_score": 95,
+      "bank_name": "Yes Bank"
+    },
+    "downstream": "Penny Drop",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Verification",
+    "method": "POST",
+    "path": "/v1/verification/ipv/sessions",
+    "summary": "Create video IPV session",
+    "description": "Starts a video In-Person Verification session (liveness, geo-tag, random code read-out, PAN shown on camera) per SEBI VIPV norms.",
+    "request": {
+      "application_id": "APP2600004",
+      "mode": "VIDEO",
+      "language": "en"
+    },
+    "response": {
+      "ipv_session_id": "IPV-77812",
+      "join_url": "https://vipv.example/s/IPV-77812",
+      "expires_at": "2026-09-05T18:00"
+    },
+    "downstream": "Video KYC Vendor",
+    "success_status": 201,
+    "params": []
+  },
+  {
+    "group": "Verification",
+    "method": "GET",
+    "path": "/v1/verification/ipv/sessions/{ipv_session_id}",
+    "summary": "Get IPV result",
+    "description": "Returns IPV outcome: liveness score, face match vs PAN/KRA photo, geo-location inside India, and agent remarks.",
+    "request": null,
+    "response": {
+      "ipv_session_id": "IPV-77812",
+      "status": "Completed",
+      "liveness_score": null,
+      "face_match_score": 0.93,
+      "geo": {
+        "lat": 19.07,
+        "lng": 72.87,
+        "in_india": true
+      }
+    },
+    "downstream": "Video KYC Vendor",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Documents",
+    "method": "POST",
+    "path": "/v1/onboarding/applications/{application_id}/documents",
+    "summary": "Upload document",
+    "description": "Multipart upload (PDF/JPG/PNG ≤ 5 MB). Runs OCR + classification; extracted fields are cross-checked with application data and returned with confidence.",
+    "request": {
+      "document_type": "Proof of Address",
+      "file": "<binary>",
+      "side": "FRONT"
+    },
+    "response": {
+      "document_id": "DOC0000032",
+      "document_type": "Proof of Address",
+      "status": "Uploaded",
+      "ocr_confidence": 0.962,
+      "extracted": {
+        "name": "Kiran Sheikh",
+        "pincode": "560054"
+      }
+    },
+    "downstream": "OCR / Doc AI",
+    "success_status": 201,
+    "params": []
+  },
+  {
+    "group": "Documents",
+    "method": "GET",
+    "path": "/v1/onboarding/applications/{application_id}/documents",
+    "summary": "List documents & checklist",
+    "description": "Document checklist with status per required document type.",
+    "request": null,
+    "response": {
+      "documents": [
+        {
+          "document_id": "DOC0000031",
+          "document_type": "PAN Card",
+          "status": "Verified",
+          "source": "DigiLocker"
+        },
+        {
+          "document_id": "DOC0000032",
+          "document_type": "Proof of Address",
+          "status": "Verified",
+          "source": "RM Scan"
+        },
+        {
+          "document_id": "DOC0000033",
+          "document_type": "Photograph",
+          "status": "Verified",
+          "source": "KRA Fetch"
+        },
+        {
+          "document_id": "DOC0000034",
+          "document_type": "Signature Specimen",
+          "status": "Verified",
+          "source": "Upload"
+        }
+      ]
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Documents",
+    "method": "PATCH",
+    "path": "/v1/documents/{document_id}",
+    "summary": "Verify / reject document",
+    "description": "Ops/Compliance marks a document Verified or Rejected with reason; rejection notifies the client and RM.",
+    "request": {
+      "status": "Rejected",
+      "rejection_reason": "Blurred image"
+    },
+    "response": {
+      "document_id": "DOC0000031",
+      "status": "Rejected",
+      "notified": [
+        "client",
+        "rm"
+      ]
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Profile & Declarations",
+    "method": "PUT",
+    "path": "/v1/onboarding/applications/{application_id}/fatca-crs",
+    "summary": "Submit FATCA / CRS self-certification",
+    "description": "Captures tax residency, TIN, place of birth, US-person indicator; for entities, FATCA classification and controlling persons.",
+    "request": {
+      "tax_residencies": [
+        {
+          "country": "India",
+          "tin": "PSNPS8976O"
+        }
+      ],
+      "place_of_birth": "Bengaluru",
+      "us_person": false
+    },
+    "response": {
+      "status": "Captured",
+      "declaration_status": "Signed"
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Profile & Declarations",
+    "method": "GET",
+    "path": "/v1/risk-profile/questionnaire",
+    "summary": "Get risk profiling questionnaire",
+    "description": "Returns the active risk-profiling questionnaire (version, questions, options, scoring weights).",
+    "request": null,
+    "response": {
+      "version": "RPQ-v3.2",
+      "questions": [
+        {
+          "id": "Q1",
+          "text": "Investment horizon",
+          "options": [
+            "1-3 yrs",
+            "3-5 yrs",
+            "5-7 yrs",
+            "> 7 yrs"
+          ]
+        },
+        {
+          "id": "Q2",
+          "text": "Tolerable drop in portfolio value",
+          "options": [
+            "< 5%",
+            "5-10%",
+            "10-20%",
+            "> 20%"
+          ]
+        }
+      ]
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Profile & Declarations",
+    "method": "POST",
+    "path": "/v1/onboarding/applications/{application_id}/risk-profile",
+    "summary": "Submit risk profile",
+    "description": "Scores answers, assigns risk category and checks product suitability against chosen strategy.",
+    "request": {
+      "version": "RPQ-v3.2",
+      "answers": {
+        "Q1": "> 7 yrs",
+        "Q2": "< 5%",
+        "Q3": "> 5 yrs",
+        "Q4": "High"
+      }
+    },
+    "response": {
+      "score": 24,
+      "risk_category": "Conservative",
+      "suitability_ok": false,
+      "product": "PMS-NDISC"
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Profile & Declarations",
+    "method": "PUT",
+    "path": "/v1/onboarding/applications/{application_id}/nominees",
+    "summary": "Set nominees / opt-out",
+    "description": "Up to 3 nominees with share % totalling 100, guardian details for minors; or explicit opt-out with declaration.",
+    "request": {
+      "nominees": [],
+      "opt_out": true
+    },
+    "response": {
+      "status": "Captured",
+      "count": 0
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Profile & Declarations",
+    "method": "PUT",
+    "path": "/v1/onboarding/applications/{application_id}/ubos",
+    "summary": "Set beneficial owners (non-individuals)",
+    "description": "Ultimate Beneficial Owner declaration per PMLA rules (>10% for companies, >15% partnerships/trusts) incl. PAN and PEP flags.",
+    "request": {
+      "ubos": [
+        {
+          "ubo_name": "Rohan Desai",
+          "pan": "ABCPD1234K",
+          "holding_pct": 51,
+          "role": "Director",
+          "pep_flag": false
+        }
+      ]
+    },
+    "response": {
+      "status": "Captured",
+      "threshold_check": "Passed"
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Profile & Declarations",
+    "method": "POST",
+    "path": "/v1/onboarding/applications/{application_id}/demat",
+    "summary": "Link / open demat account",
+    "description": "Links an existing demat (NSDL/CDSL) via CML or requests a new one with the empanelled DP; captures DDPI/POA.",
+    "request": {
+      "depository": "CDSL",
+      "dp_id": null,
+      "client_id_at_dp": "4925661410334390",
+      "poa_ddpi": "POA"
+    },
+    "response": {
+      "status": "Active"
+    },
+    "downstream": "Depository Participant",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "AML Screening",
+    "method": "POST",
+    "path": "/v1/screening/run",
+    "summary": "Run AML / sanctions screening",
+    "description": "Screens client, joint holders and UBOs against UN, OFAC, MHA, SEBI debarred, PEP and adverse media; returns per-list results and an overall AML risk rating.",
+    "request": {
+      "application_id": "APP2600004",
+      "subjects": [
+        {
+          "name": "Kiran Sheikh",
+          "pan": "PSNPS8976O",
+          "dob": "1964-04-12"
+        }
+      ],
+      "lists": "ALL"
+    },
+    "response": {
+      "screening_batch_id": "SCB-118204",
+      "overall": "Clear",
+      "aml_risk_rating": "Low",
+      "results": [
+        {
+          "list_name": "UN Sanctions (UNSC 1267)",
+          "result": "No Match",
+          "match_score": 34
+        },
+        {
+          "list_name": "OFAC SDN",
+          "result": "No Match",
+          "match_score": 22
+        },
+        {
+          "list_name": "MHA Banned Orgs",
+          "result": "No Match",
+          "match_score": 4
+        },
+        {
+          "list_name": "SEBI Debarred",
+          "result": "No Match",
+          "match_score": 2
+        },
+        {
+          "list_name": "PEP Database",
+          "result": "No Match",
+          "match_score": 15
+        },
+        {
+          "list_name": "Adverse Media",
+          "result": "No Match",
+          "match_score": 1
+        }
+      ]
+    },
+    "downstream": "AML Screening",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "AML Screening",
+    "method": "POST",
+    "path": "/v1/screening/{screening_id}/disposition",
+    "summary": "Disposition a match",
+    "description": "Compliance records disposition (False Positive / True Match / Escalate to Principal Officer) with evidence. True matches block activation.",
+    "request": {
+      "disposition": "False Positive - Cleared",
+      "evidence": "DOB and PAN differ from listed entity",
+      "reviewer": "CMP-VIVEK"
+    },
+    "response": {
+      "screening_id": "SCR0000019",
+      "disposition": "False Positive - Cleared"
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Agreement & eSign",
+    "method": "POST",
+    "path": "/v1/onboarding/applications/{application_id}/agreements",
+    "summary": "Generate client agreement",
+    "description": "Generates the PMS/AIF client agreement, disclosure document acknowledgement, fee schedule and account opening form as a single PDF pack.",
+    "request": {
+      "templates": [
+        "PMS_CLIENT_AGREEMENT_v2026",
+        "FEE_SCHEDULE",
+        "AOF"
+      ]
+    },
+    "response": {
+      "agreement_id": "AGR-30321",
+      "pages": 42,
+      "pdf_url": "https://files.example/agr/AGR-30321.pdf"
+    },
+    "downstream": "—",
+    "success_status": 201,
+    "params": []
+  },
+  {
+    "group": "Agreement & eSign",
+    "method": "POST",
+    "path": "/v1/esign/requests",
+    "summary": "Create eSign request",
+    "description": "Initiates Aadhaar OTP eSign (or DSC) for all signatories with signature placements; supports sequential multi-party signing.",
+    "request": {
+      "agreement_id": "AGR-30321",
+      "mode": "Aadhaar eSign",
+      "signers": [
+        {
+          "name": "Kiran Sheikh",
+          "mobile": "+91 8679984033",
+          "order": 1
+        }
+      ]
+    },
+    "response": {
+      "esign_request_id": "ESR-71045",
+      "status": "Sent",
+      "sign_url": "https://esign.example/ESR-71045"
+    },
+    "downstream": "eSign ASP",
+    "success_status": 201,
+    "params": []
+  },
+  {
+    "group": "Agreement & eSign",
+    "method": "GET",
+    "path": "/v1/esign/requests/{esign_request_id}",
+    "summary": "eSign status",
+    "description": "Per-signer status and signed document download once complete.",
+    "request": null,
+    "response": {
+      "esign_request_id": "ESR-71045",
+      "status": "Signed",
+      "signed_pdf_url": "https://files.example/agr/AGR-30321-signed.pdf"
+    },
+    "downstream": "eSign ASP",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Accounts",
+    "method": "POST",
+    "path": "/v1/accounts",
+    "summary": "Activate investment account",
+    "description": "Creates the PMS/AIF/Advisory account in the core portfolio system after approval and eSign; generates UCC and custodian mapping, and schedules funding instructions.",
+    "request": {
+      "application_id": "APP2600004",
+      "product_code": "PMS-NDISC",
+      "strategy": "Custom Equity",
+      "commitment_inr": 5000000,
+      "funding_mode": "Securities Transfer",
+      "fee_structure": "Variable 20% over 12% hurdle"
+    },
+    "response": {
+      "account_id": "PMS-NDISC-596564",
+      "status": "Active",
+      "ucc_code": "UCC2921542",
+      "custodian": "Lotus Trustee & Custody",
+      "activation_date": "2026-09-11"
+    },
+    "downstream": "Portfolio Core",
+    "success_status": 201,
+    "params": []
+  },
+  {
+    "group": "Accounts",
+    "method": "GET",
+    "path": "/v1/clients/{client_id}/kyc-summary",
+    "summary": "Client KYC 360",
+    "description": "Consolidated KYC view: identifiers, KRA/CKYC status, risk & AML rating, document validity, screening history and next periodic review date.",
+    "request": null,
+    "response": {
+      "client_id": "CL000004",
+      "name": "Kiran Sheikh",
+      "pan": "PSNPS8976O",
+      "kra_status": "KYC Validated",
+      "ckyc_number": "42999460928241",
+      "risk_category": "Conservative",
+      "aml_risk_rating": "Low",
+      "due_diligence_level": "CDD",
+      "periodic_kyc_review_due": "2036-09-01"
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  },
+  {
+    "group": "Accounts",
+    "method": "GET",
+    "path": "/v1/kyc/reviews/due",
+    "summary": "Periodic KYC reviews due",
+    "description": "Lists clients due for re-KYC based on risk-based review cycle (High 2y / Medium 8y / Low 10y) and expiring documents.",
+    "request": null,
+    "response": {
+      "data": [
+        {
+          "client_id": "CL000004",
+          "name": "Kiran Sheikh",
+          "review_due": "2036-09-01",
+          "reason": "Periodic"
+        }
+      ]
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": [
+      "due_before",
+      "aml_risk_rating"
+    ]
+  },
+  {
+    "group": "Webhooks",
+    "method": "POST",
+    "path": "{partner_callback_url}",
+    "summary": "Event notifications",
+    "description": "Signed (HMAC-SHA256) events: application.stage_changed, kyc.kra_status_changed, document.rejected, screening.match_found, esign.completed, account.activated. Retries with exponential back-off for 24h.",
+    "request": null,
+    "response": {
+      "event": "account.activated",
+      "event_id": "evt_01J9X",
+      "occurred_at": "2026-09-10T11:02:00+05:30",
+      "data": {
+        "application_id": "APP2600004",
+        "account_id": "PMS-NDISC-596564"
+      }
+    },
+    "downstream": "—",
+    "success_status": 200,
+    "params": []
+  }
+]

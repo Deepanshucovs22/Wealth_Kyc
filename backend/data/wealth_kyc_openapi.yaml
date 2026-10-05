@@ -1,0 +1,2225 @@
+openapi: 3.0.3
+info:
+  title: Wealth Platform – Account Opening & KYC API (Mock)
+  version: 1.0.0
+  description: 'Mock API specification for client onboarding and KYC on an Indian wealth management / PMS / AIF platform.
+    Built for demo and prototyping with synthetic data; not an official vendor API. Regulatory references: SEBI KRA regulations,
+    CKYC (CERSAI), PMLA 2002 & rules, FATCA/CRS, SEBI PMS & AIF regulations.'
+servers:
+- url: https://sandbox.api.example.com
+  description: Sandbox (mock)
+security:
+- bearerAuth: []
+tags:
+- name: Auth
+- name: Onboarding Applications
+- name: KYC Registry
+- name: Verification
+- name: Documents
+- name: Profile & Declarations
+- name: AML Screening
+- name: Agreement & eSign
+- name: Accounts
+paths:
+  /oauth2/token:
+    post:
+      tags:
+      - Auth
+      summary: Get access token
+      description: OAuth 2.0 client-credentials grant for partner/system integrations; RM/ops users use OIDC SSO. Tokens are
+        scoped (onboarding:write, kyc:read, screening:write, accounts:write) and expire in 3600s.
+      operationId: get_access_token
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  token_type:
+                    type: string
+                  expires_in:
+                    type: integer
+                  scope:
+                    type: string
+              example:
+                access_token: eyJhbGciOiJSUzI1NiIs...
+                token_type: Bearer
+                expires_in: 3600
+                scope: onboarding:write kyc:read
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                grant_type:
+                  type: string
+                client_id:
+                  type: string
+                client_secret:
+                  type: string
+                scope:
+                  type: string
+            example:
+              grant_type: client_credentials
+              client_id: partner_demo_01
+              client_secret: ••••••
+              scope: onboarding:write kyc:read
+      security: []
+  /v1/onboarding/applications:
+    post:
+      tags:
+      - Onboarding Applications
+      summary: Create onboarding application
+      description: Starts a new account-opening application for a prospect. Returns an application_id and the checklist of
+        required steps/documents derived from client_type, residential status and selected product. Idempotent with the Idempotency-Key
+        header.
+      operationId: create_onboarding_application
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  application_id:
+                    type: string
+                  client_id:
+                    type: string
+                  status:
+                    type: string
+                  required_steps:
+                    type: array
+                    items:
+                      type: string
+                  required_documents:
+                    type: array
+                    items:
+                      type: string
+                  created_at:
+                    type: string
+              example:
+                application_id: APP2600004
+                client_id: CL000004
+                status: Draft
+                required_steps:
+                - KYC_FETCH
+                - PERSONAL_DETAILS
+                - FATCA_CRS
+                - BANK
+                - DEMAT
+                - NOMINEE
+                - RISK_PROFILE
+                - DOCUMENTS
+                - IPV
+                - SCREENING
+                - AGREEMENT_ESIGN
+                required_documents:
+                - PAN Card
+                - Proof of Address
+                - Photograph
+                - Signature Specimen
+                - Cancelled Cheque / Bank Statement
+                - Income Proof
+                - FATCA/CRS Self-Certification
+                - Client Agreement
+                created_at: 2026-09-04T16:28
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_type:
+                  type: string
+                pan:
+                  type: string
+                name:
+                  type: string
+                date_of_birth:
+                  type: string
+                mobile:
+                  type: string
+                email:
+                  type: string
+                product_code:
+                  type: string
+                strategy:
+                  type: string
+                rm_id:
+                  type: string
+                channel:
+                  type: string
+            example:
+              client_type: Individual - Resident
+              pan: PSNPS8976O
+              name: Kiran Sheikh
+              date_of_birth: '1964-04-12'
+              mobile: +91 8679984033
+              email: kiran.sheikh43@example.com
+              product_code: PMS-NDISC
+              strategy: Custom Equity
+              rm_id: RM004
+              channel: Family Office Referral
+    get:
+      tags:
+      - Onboarding Applications
+      summary: List / search applications
+      description: Paginated work-queue view for RMs and Ops. Filter by stage, rm_id, client_type, aml_risk_rating, created
+        date range. Supports cursor pagination.
+      operationId: list_search_applications
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        application_id:
+                          type: string
+                        client_id:
+                          type: string
+                        name:
+                          type: string
+                        stage:
+                          type: string
+                        rm_name:
+                          type: string
+                        aml_risk_rating:
+                          type: string
+                        last_updated_at:
+                          type: string
+                  next_cursor:
+                    type: string
+                  total:
+                    type: integer
+              example:
+                data:
+                - application_id: APP2600004
+                  client_id: CL000004
+                  name: Kiran Sheikh
+                  stage: Account Activated
+                  rm_name: Rakesh Iyer
+                  aml_risk_rating: Low
+                  last_updated_at: 2026-09-17T16:28
+                next_cursor: eyJvZmZzZXQiOjUwfQ==
+                total: 240
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: stage
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: rm_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: client_type
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: aml_risk_rating
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: string
+  /v1/onboarding/applications/{application_id}:
+    get:
+      tags:
+      - Onboarding Applications
+      summary: Get application
+      description: 'Full application aggregate: client profile, step completion, documents, screening outcome, open exceptions
+        and audit trail pointer.'
+      operationId: get_application
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  application_id:
+                    type: string
+                  client:
+                    type: object
+                    properties:
+                      client_id:
+                        type: string
+                      name:
+                        type: string
+                      client_type:
+                        type: string
+                      pan:
+                        type: string
+                      kra_status:
+                        type: string
+                      ckyc_number:
+                        type: string
+                      residential_status:
+                        type: string
+                      risk_category:
+                        type: string
+                      aml_risk_rating:
+                        type: string
+                  stage:
+                    type: string
+                  steps_completed:
+                    type: integer
+                  steps_total:
+                    type: integer
+                  open_exceptions:
+                    type: array
+                    items: {}
+              example:
+                application_id: APP2600004
+                client:
+                  client_id: CL000004
+                  name: Kiran Sheikh
+                  client_type: Individual - Resident
+                  pan: PSNPS8976O
+                  kra_status: KYC Validated
+                  ckyc_number: '42999460928241'
+                  residential_status: Resident Individual
+                  risk_category: Conservative
+                  aml_risk_rating: Low
+                stage: Account Activated
+                steps_completed: 11
+                steps_total: 11
+                open_exceptions: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      tags:
+      - Onboarding Applications
+      summary: Update application sections
+      description: Partial update of personal, address, contact, occupation/income or product sections (JSON Merge Patch).
+        Each section is re-validated; fields pre-filled from KRA/CKYC are locked unless override_reason is supplied.
+      operationId: update_application_sections
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  application_id:
+                    type: string
+                  updated_sections:
+                    type: array
+                    items:
+                      type: string
+                  validation_errors:
+                    type: array
+                    items: {}
+              example:
+                application_id: APP2600004
+                updated_sections:
+                - address
+                - occupation
+                validation_errors: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address:
+                  type: object
+                  properties:
+                    line1:
+                      type: string
+                    line2:
+                      type: string
+                    city:
+                      type: string
+                    state:
+                      type: string
+                    pincode:
+                      type: string
+                    country:
+                      type: string
+                occupation:
+                  type: string
+                annual_income_band:
+                  type: string
+                source_of_wealth:
+                  type: string
+            example:
+              address:
+                line1: 711, Lake Side Towers
+                line2: Linking Road
+                city: Bengaluru
+                state: Karnataka
+                pincode: '560054'
+                country: India
+              occupation: Business Owner
+              annual_income_band: 5-10 Cr
+              source_of_wealth: Business Income
+  /v1/onboarding/applications/{application_id}/submit:
+    post:
+      tags:
+      - Onboarding Applications
+      summary: Submit for compliance review
+      description: Locks the application and moves it to Compliance Review once all mandatory steps pass. Returns blocking
+        checks if anything is missing.
+      operationId: submit_for_compliance_review
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  application_id:
+                    type: string
+                  stage:
+                    type: string
+                  blocking_checks:
+                    type: array
+                    items: {}
+                  sla_due_at:
+                    type: string
+              example:
+                application_id: APP2600004
+                stage: Compliance Review
+                blocking_checks: []
+                sla_due_at: 2026-09-12T18:00
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                submitted_by:
+                  type: string
+                declaration_accepted:
+                  type: boolean
+            example:
+              submitted_by: RM004
+              declaration_accepted: true
+  /v1/onboarding/applications/{application_id}/decision:
+    post:
+      tags:
+      - Onboarding Applications
+      summary: Compliance decision
+      description: 'Maker-checker action by Compliance: APPROVE, REJECT, HOLD or SEND_BACK with reason codes. APPROVE triggers
+        agreement generation and eSign.'
+      operationId: compliance_decision
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  application_id:
+                    type: string
+                  stage:
+                    type: string
+                  decision_id:
+                    type: string
+              example:
+                application_id: APP2600004
+                stage: eSign Pending
+                decision_id: DEC-2026-004512
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                decision:
+                  type: string
+                reason_code:
+                  nullable: true
+                remarks:
+                  type: string
+                checker_id:
+                  type: string
+            example:
+              decision: APPROVE
+              reason_code: null
+              remarks: CDD complete, low risk
+              checker_id: CMP-ASHA
+  /v1/onboarding/applications/{application_id}/timeline:
+    get:
+      tags:
+      - Onboarding Applications
+      summary: Application audit timeline
+      description: Immutable, time-ordered stage transitions and user actions for audit (SEBI record-keeping).
+      operationId: application_audit_timeline
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        stage:
+                          type: string
+                        action:
+                          type: string
+                        actor:
+                          type: string
+                        timestamp:
+                          type: string
+              example:
+                events:
+                - stage: Draft
+                  action: Entered stage
+                  actor: Rakesh Iyer
+                  timestamp: 2026-09-04T16:28
+                - stage: KYC Fetch
+                  action: Entered stage
+                  actor: System
+                  timestamp: 2026-09-05T04:28
+                - stage: Documents Pending
+                  action: Entered stage
+                  actor: Rakesh Iyer
+                  timestamp: 2026-09-06T01:28
+                - stage: IPV Pending
+                  action: Entered stage
+                  actor: System
+                  timestamp: 2026-09-06T09:28
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/kyc/kra/{pan}:
+    get:
+      tags:
+      - KYC Registry
+      summary: KRA status & fetch
+      description: 'Queries the KYC Registration Agency (CVL/NDML/CAMS/KFin/DOTEX) for PAN status; when Registered/Validated,
+        returns KYC data for pre-fill. Fresh KYC is triggered when status is Not Found.
+
+
+        Downstream: KRA Gateway'
+      operationId: kra_status_and_fetch
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pan:
+                    type: string
+                  kra:
+                    type: string
+                  kra_status:
+                    type: string
+                  name:
+                    type: string
+                  dob:
+                    type: string
+                  address:
+                    type: object
+                    properties:
+                      city:
+                        type: string
+                      pincode:
+                        type: string
+                  last_modified:
+                    type: string
+              example:
+                pan: PSNPS8976O
+                kra: CAMS KRA
+                kra_status: KYC Validated
+                name: Kiran Sheikh
+                dob: '1964-04-12'
+                address:
+                  city: Bengaluru
+                  pincode: '560054'
+                last_modified: '2024-03-11'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: pan
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/kyc/kra/upload:
+    post:
+      tags:
+      - KYC Registry
+      summary: Upload / modify KYC to KRA
+      description: 'Pushes fresh or modified KYC record (with IPV and documents) to the KRA after verification. Async; status
+        via webhook kyc.kra_status_changed.
+
+
+        Downstream: KRA Gateway'
+      operationId: upload_modify_kyc_to_kra
+      responses:
+        '202':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  submission_id:
+                    type: string
+                  status:
+                    type: string
+              example:
+                submission_id: KRAUP-990214
+                status: Submitted
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                application_id:
+                  type: string
+                pan:
+                  type: string
+                action:
+                  type: string
+                ipv_ref:
+                  type: string
+            example:
+              application_id: APP2600004
+              pan: PSNPS8976O
+              action: MODIFY
+              ipv_ref: IPV-77812
+  /v1/kyc/ckyc/search:
+    get:
+      tags:
+      - KYC Registry
+      summary: CKYC search
+      description: 'Searches CERSAI Central KYC Registry by PAN/ID to retrieve CKYC number (KIN).
+
+
+        Downstream: CKYC (CERSAI)'
+      operationId: ckyc_search
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pan:
+                    type: string
+                  ckyc_number:
+                    type: string
+                  found:
+                    type: boolean
+              example:
+                pan: PSNPS8976O
+                ckyc_number: '42999460928241'
+                found: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: id_type
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: id_value
+        in: query
+        required: false
+        schema:
+          type: string
+  /v1/kyc/ckyc/download:
+    post:
+      tags:
+      - KYC Registry
+      summary: CKYC download
+      description: 'Downloads the CKYC record (photo, identity and address details) using KIN plus DOB for pre-fill and verification.
+
+
+        Downstream: CKYC (CERSAI)'
+      operationId: ckyc_download
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ckyc_number:
+                    type: string
+                  name:
+                    type: string
+                  photo_ref:
+                    type: string
+                  address_proof_type:
+                    type: string
+              example:
+                ckyc_number: '42999460928241'
+                name: Kiran Sheikh
+                photo_ref: blob://ckyc/photo/CL000004
+                address_proof_type: Aadhaar (masked)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ckyc_number:
+                  type: string
+                dob:
+                  type: string
+            example:
+              ckyc_number: '42999460928241'
+              dob: '1964-04-12'
+  /v1/kyc/digilocker/consent:
+    post:
+      tags:
+      - KYC Registry
+      summary: DigiLocker consent link
+      description: 'Creates a consent session for the client to share PAN and Aadhaar XML/address documents from DigiLocker.
+
+
+        Downstream: DigiLocker'
+      operationId: digilocker_consent_link
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  consent_id:
+                    type: string
+                  consent_url:
+                    type: string
+                  expires_in:
+                    type: integer
+              example:
+                consent_id: DLC-55102
+                consent_url: https://digilocker.example/consent/DLC-55102
+                expires_in: 900
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                application_id:
+                  type: string
+                documents:
+                  type: array
+                  items:
+                    type: string
+                redirect_url:
+                  type: string
+            example:
+              application_id: APP2600004
+              documents:
+              - PAN
+              - AADHAAR
+              redirect_url: https://app.example.com/onboarding/return
+  /v1/verification/pan:
+    post:
+      tags:
+      - Verification
+      summary: Verify PAN
+      description: 'Validates PAN with the ITD/Protean service: existence, name match, DOB match and Aadhaar-seeding status.
+
+
+        Downstream: NSDL/Protean PAN'
+      operationId: verify_pan
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pan:
+                    type: string
+                  valid:
+                    type: boolean
+                  name_match:
+                    type: boolean
+                  dob_match:
+                    type: boolean
+                  aadhaar_seeded:
+                    type: boolean
+                  category:
+                    type: string
+              example:
+                pan: PSNPS8976O
+                valid: true
+                name_match: true
+                dob_match: true
+                aadhaar_seeded: true
+                category: Individual
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pan:
+                  type: string
+                name:
+                  type: string
+                dob:
+                  type: string
+            example:
+              pan: PSNPS8976O
+              name: Kiran Sheikh
+              dob: '1964-04-12'
+  /v1/verification/bank-account:
+    post:
+      tags:
+      - Verification
+      summary: Bank account verification (penny drop)
+      description: 'Performs ₹1 IMPS penny-drop (or penny-less) verification and returns beneficiary name with fuzzy name-match
+        score against KYC name.
+
+
+        Downstream: Penny Drop'
+      operationId: bank_account_verification_penny_drop
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bank_link_id:
+                    type: string
+                  status:
+                    type: string
+                  beneficiary_name:
+                    type: string
+                  name_match_score:
+                    type: integer
+                  bank_name:
+                    type: string
+              example:
+                bank_link_id: BK000006
+                status: Verified
+                beneficiary_name: KIRAN SHEIKH
+                name_match_score: 95
+                bank_name: Yes Bank
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                application_id:
+                  type: string
+                account_number:
+                  type: string
+                ifsc:
+                  type: string
+                account_type:
+                  type: string
+            example:
+              application_id: APP2600004
+              account_number: XXXXXXXX1186
+              ifsc: YESB0054921
+              account_type: Savings
+  /v1/verification/ipv/sessions:
+    post:
+      tags:
+      - Verification
+      summary: Create video IPV session
+      description: 'Starts a video In-Person Verification session (liveness, geo-tag, random code read-out, PAN shown on camera)
+        per SEBI VIPV norms.
+
+
+        Downstream: Video KYC Vendor'
+      operationId: create_video_ipv_session
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ipv_session_id:
+                    type: string
+                  join_url:
+                    type: string
+                  expires_at:
+                    type: string
+              example:
+                ipv_session_id: IPV-77812
+                join_url: https://vipv.example/s/IPV-77812
+                expires_at: 2026-09-05T18:00
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                application_id:
+                  type: string
+                mode:
+                  type: string
+                language:
+                  type: string
+            example:
+              application_id: APP2600004
+              mode: VIDEO
+              language: en
+  /v1/verification/ipv/sessions/{ipv_session_id}:
+    get:
+      tags:
+      - Verification
+      summary: Get IPV result
+      description: 'Returns IPV outcome: liveness score, face match vs PAN/KRA photo, geo-location inside India, and agent
+        remarks.
+
+
+        Downstream: Video KYC Vendor'
+      operationId: get_ipv_result
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ipv_session_id:
+                    type: string
+                  status:
+                    type: string
+                  liveness_score:
+                    nullable: true
+                  face_match_score:
+                    type: number
+                  geo:
+                    type: object
+                    properties:
+                      lat:
+                        type: number
+                      lng:
+                        type: number
+                      in_india:
+                        type: boolean
+              example:
+                ipv_session_id: IPV-77812
+                status: Completed
+                liveness_score: null
+                face_match_score: 0.93
+                geo:
+                  lat: 19.07
+                  lng: 72.87
+                  in_india: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: ipv_session_id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/onboarding/applications/{application_id}/documents:
+    post:
+      tags:
+      - Documents
+      summary: Upload document
+      description: 'Multipart upload (PDF/JPG/PNG ≤ 5 MB). Runs OCR + classification; extracted fields are cross-checked with
+        application data and returned with confidence.
+
+
+        Downstream: OCR / Doc AI'
+      operationId: upload_document
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document_id:
+                    type: string
+                  document_type:
+                    type: string
+                  status:
+                    type: string
+                  ocr_confidence:
+                    type: number
+                  extracted:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      pincode:
+                        type: string
+              example:
+                document_id: DOC0000032
+                document_type: Proof of Address
+                status: Uploaded
+                ocr_confidence: 0.962
+                extracted:
+                  name: Kiran Sheikh
+                  pincode: '560054'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                document_type:
+                  type: string
+                file:
+                  type: string
+                side:
+                  type: string
+            example:
+              document_type: Proof of Address
+              file: <binary>
+              side: FRONT
+    get:
+      tags:
+      - Documents
+      summary: List documents & checklist
+      description: Document checklist with status per required document type.
+      operationId: list_documents_and_checklist
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        document_id:
+                          type: string
+                        document_type:
+                          type: string
+                        status:
+                          type: string
+                        source:
+                          type: string
+              example:
+                documents:
+                - document_id: DOC0000031
+                  document_type: PAN Card
+                  status: Verified
+                  source: DigiLocker
+                - document_id: DOC0000032
+                  document_type: Proof of Address
+                  status: Verified
+                  source: RM Scan
+                - document_id: DOC0000033
+                  document_type: Photograph
+                  status: Verified
+                  source: KRA Fetch
+                - document_id: DOC0000034
+                  document_type: Signature Specimen
+                  status: Verified
+                  source: Upload
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/documents/{document_id}:
+    patch:
+      tags:
+      - Documents
+      summary: Verify / reject document
+      description: Ops/Compliance marks a document Verified or Rejected with reason; rejection notifies the client and RM.
+      operationId: verify_reject_document
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document_id:
+                    type: string
+                  status:
+                    type: string
+                  notified:
+                    type: array
+                    items:
+                      type: string
+              example:
+                document_id: DOC0000031
+                status: Rejected
+                notified:
+                - client
+                - rm
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: document_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                rejection_reason:
+                  type: string
+            example:
+              status: Rejected
+              rejection_reason: Blurred image
+  /v1/onboarding/applications/{application_id}/fatca-crs:
+    put:
+      tags:
+      - Profile & Declarations
+      summary: Submit FATCA / CRS self-certification
+      description: Captures tax residency, TIN, place of birth, US-person indicator; for entities, FATCA classification and
+        controlling persons.
+      operationId: submit_fatca_crs_self-certification
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  declaration_status:
+                    type: string
+              example:
+                status: Captured
+                declaration_status: Signed
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tax_residencies:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      country:
+                        type: string
+                      tin:
+                        type: string
+                place_of_birth:
+                  type: string
+                us_person:
+                  type: boolean
+            example:
+              tax_residencies:
+              - country: India
+                tin: PSNPS8976O
+              place_of_birth: Bengaluru
+              us_person: false
+  /v1/risk-profile/questionnaire:
+    get:
+      tags:
+      - Profile & Declarations
+      summary: Get risk profiling questionnaire
+      description: Returns the active risk-profiling questionnaire (version, questions, options, scoring weights).
+      operationId: get_risk_profiling_questionnaire
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                  questions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        text:
+                          type: string
+                        options:
+                          type: array
+                          items:
+                            type: string
+              example:
+                version: RPQ-v3.2
+                questions:
+                - id: Q1
+                  text: Investment horizon
+                  options:
+                  - 1-3 yrs
+                  - 3-5 yrs
+                  - 5-7 yrs
+                  - '> 7 yrs'
+                - id: Q2
+                  text: Tolerable drop in portfolio value
+                  options:
+                  - < 5%
+                  - 5-10%
+                  - 10-20%
+                  - '> 20%'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /v1/onboarding/applications/{application_id}/risk-profile:
+    post:
+      tags:
+      - Profile & Declarations
+      summary: Submit risk profile
+      description: Scores answers, assigns risk category and checks product suitability against chosen strategy.
+      operationId: submit_risk_profile
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  score:
+                    type: integer
+                  risk_category:
+                    type: string
+                  suitability_ok:
+                    type: boolean
+                  product:
+                    type: string
+              example:
+                score: 24
+                risk_category: Conservative
+                suitability_ok: false
+                product: PMS-NDISC
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: string
+                answers:
+                  type: object
+                  properties:
+                    Q1:
+                      type: string
+                    Q2:
+                      type: string
+                    Q3:
+                      type: string
+                    Q4:
+                      type: string
+            example:
+              version: RPQ-v3.2
+              answers:
+                Q1: '> 7 yrs'
+                Q2: < 5%
+                Q3: '> 5 yrs'
+                Q4: High
+  /v1/onboarding/applications/{application_id}/nominees:
+    put:
+      tags:
+      - Profile & Declarations
+      summary: Set nominees / opt-out
+      description: Up to 3 nominees with share % totalling 100, guardian details for minors; or explicit opt-out with declaration.
+      operationId: set_nominees_opt-out
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  count:
+                    type: integer
+              example:
+                status: Captured
+                count: 0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nominees:
+                  type: array
+                  items: {}
+                opt_out:
+                  type: boolean
+            example:
+              nominees: []
+              opt_out: true
+  /v1/onboarding/applications/{application_id}/ubos:
+    put:
+      tags:
+      - Profile & Declarations
+      summary: Set beneficial owners (non-individuals)
+      description: Ultimate Beneficial Owner declaration per PMLA rules (>10% for companies, >15% partnerships/trusts) incl.
+        PAN and PEP flags.
+      operationId: set_beneficial_owners_non-individuals
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  threshold_check:
+                    type: string
+              example:
+                status: Captured
+                threshold_check: Passed
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ubos:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      ubo_name:
+                        type: string
+                      pan:
+                        type: string
+                      holding_pct:
+                        type: integer
+                      role:
+                        type: string
+                      pep_flag:
+                        type: boolean
+            example:
+              ubos:
+              - ubo_name: Rohan Desai
+                pan: ABCPD1234K
+                holding_pct: 51
+                role: Director
+                pep_flag: false
+  /v1/onboarding/applications/{application_id}/demat:
+    post:
+      tags:
+      - Profile & Declarations
+      summary: Link / open demat account
+      description: 'Links an existing demat (NSDL/CDSL) via CML or requests a new one with the empanelled DP; captures DDPI/POA.
+
+
+        Downstream: Depository Participant'
+      operationId: link_open_demat_account
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+              example:
+                status: Active
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                depository:
+                  type: string
+                dp_id:
+                  nullable: true
+                client_id_at_dp:
+                  type: string
+                poa_ddpi:
+                  type: string
+            example:
+              depository: CDSL
+              dp_id: null
+              client_id_at_dp: '4925661410334390'
+              poa_ddpi: POA
+  /v1/screening/run:
+    post:
+      tags:
+      - AML Screening
+      summary: Run AML / sanctions screening
+      description: 'Screens client, joint holders and UBOs against UN, OFAC, MHA, SEBI debarred, PEP and adverse media; returns
+        per-list results and an overall AML risk rating.
+
+
+        Downstream: AML Screening'
+      operationId: run_aml_sanctions_screening
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  screening_batch_id:
+                    type: string
+                  overall:
+                    type: string
+                  aml_risk_rating:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        list_name:
+                          type: string
+                        result:
+                          type: string
+                        match_score:
+                          type: integer
+              example:
+                screening_batch_id: SCB-118204
+                overall: Clear
+                aml_risk_rating: Low
+                results:
+                - list_name: UN Sanctions (UNSC 1267)
+                  result: No Match
+                  match_score: 34
+                - list_name: OFAC SDN
+                  result: No Match
+                  match_score: 22
+                - list_name: MHA Banned Orgs
+                  result: No Match
+                  match_score: 4
+                - list_name: SEBI Debarred
+                  result: No Match
+                  match_score: 2
+                - list_name: PEP Database
+                  result: No Match
+                  match_score: 15
+                - list_name: Adverse Media
+                  result: No Match
+                  match_score: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                application_id:
+                  type: string
+                subjects:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      pan:
+                        type: string
+                      dob:
+                        type: string
+                lists:
+                  type: string
+            example:
+              application_id: APP2600004
+              subjects:
+              - name: Kiran Sheikh
+                pan: PSNPS8976O
+                dob: '1964-04-12'
+              lists: ALL
+  /v1/screening/{screening_id}/disposition:
+    post:
+      tags:
+      - AML Screening
+      summary: Disposition a match
+      description: Compliance records disposition (False Positive / True Match / Escalate to Principal Officer) with evidence.
+        True matches block activation.
+      operationId: disposition_a_match
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  screening_id:
+                    type: string
+                  disposition:
+                    type: string
+              example:
+                screening_id: SCR0000019
+                disposition: False Positive - Cleared
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: screening_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                disposition:
+                  type: string
+                evidence:
+                  type: string
+                reviewer:
+                  type: string
+            example:
+              disposition: False Positive - Cleared
+              evidence: DOB and PAN differ from listed entity
+              reviewer: CMP-VIVEK
+  /v1/onboarding/applications/{application_id}/agreements:
+    post:
+      tags:
+      - Agreement & eSign
+      summary: Generate client agreement
+      description: Generates the PMS/AIF client agreement, disclosure document acknowledgement, fee schedule and account opening
+        form as a single PDF pack.
+      operationId: generate_client_agreement
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agreement_id:
+                    type: string
+                  pages:
+                    type: integer
+                  pdf_url:
+                    type: string
+              example:
+                agreement_id: AGR-30321
+                pages: 42
+                pdf_url: https://files.example/agr/AGR-30321.pdf
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                templates:
+                  type: array
+                  items:
+                    type: string
+            example:
+              templates:
+              - PMS_CLIENT_AGREEMENT_v2026
+              - FEE_SCHEDULE
+              - AOF
+  /v1/esign/requests:
+    post:
+      tags:
+      - Agreement & eSign
+      summary: Create eSign request
+      description: 'Initiates Aadhaar OTP eSign (or DSC) for all signatories with signature placements; supports sequential
+        multi-party signing.
+
+
+        Downstream: eSign ASP'
+      operationId: create_esign_request
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  esign_request_id:
+                    type: string
+                  status:
+                    type: string
+                  sign_url:
+                    type: string
+              example:
+                esign_request_id: ESR-71045
+                status: Sent
+                sign_url: https://esign.example/ESR-71045
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agreement_id:
+                  type: string
+                mode:
+                  type: string
+                signers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      mobile:
+                        type: string
+                      order:
+                        type: integer
+            example:
+              agreement_id: AGR-30321
+              mode: Aadhaar eSign
+              signers:
+              - name: Kiran Sheikh
+                mobile: +91 8679984033
+                order: 1
+  /v1/esign/requests/{esign_request_id}:
+    get:
+      tags:
+      - Agreement & eSign
+      summary: eSign status
+      description: 'Per-signer status and signed document download once complete.
+
+
+        Downstream: eSign ASP'
+      operationId: esign_status
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  esign_request_id:
+                    type: string
+                  status:
+                    type: string
+                  signed_pdf_url:
+                    type: string
+              example:
+                esign_request_id: ESR-71045
+                status: Signed
+                signed_pdf_url: https://files.example/agr/AGR-30321-signed.pdf
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: esign_request_id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/accounts:
+    post:
+      tags:
+      - Accounts
+      summary: Activate investment account
+      description: 'Creates the PMS/AIF/Advisory account in the core portfolio system after approval and eSign; generates
+        UCC and custodian mapping, and schedules funding instructions.
+
+
+        Downstream: Portfolio Core'
+      operationId: activate_investment_account
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account_id:
+                    type: string
+                  status:
+                    type: string
+                  ucc_code:
+                    type: string
+                  custodian:
+                    type: string
+                  activation_date:
+                    type: string
+              example:
+                account_id: PMS-NDISC-596564
+                status: Active
+                ucc_code: UCC2921542
+                custodian: Lotus Trustee & Custody
+                activation_date: '2026-09-11'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                application_id:
+                  type: string
+                product_code:
+                  type: string
+                strategy:
+                  type: string
+                commitment_inr:
+                  type: integer
+                funding_mode:
+                  type: string
+                fee_structure:
+                  type: string
+            example:
+              application_id: APP2600004
+              product_code: PMS-NDISC
+              strategy: Custom Equity
+              commitment_inr: 5000000
+              funding_mode: Securities Transfer
+              fee_structure: Variable 20% over 12% hurdle
+  /v1/clients/{client_id}/kyc-summary:
+    get:
+      tags:
+      - Accounts
+      summary: Client KYC 360
+      description: 'Consolidated KYC view: identifiers, KRA/CKYC status, risk & AML rating, document validity, screening history
+        and next periodic review date.'
+      operationId: client_kyc_360
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client_id:
+                    type: string
+                  name:
+                    type: string
+                  pan:
+                    type: string
+                  kra_status:
+                    type: string
+                  ckyc_number:
+                    type: string
+                  risk_category:
+                    type: string
+                  aml_risk_rating:
+                    type: string
+                  due_diligence_level:
+                    type: string
+                  periodic_kyc_review_due:
+                    type: string
+              example:
+                client_id: CL000004
+                name: Kiran Sheikh
+                pan: PSNPS8976O
+                kra_status: KYC Validated
+                ckyc_number: '42999460928241'
+                risk_category: Conservative
+                aml_risk_rating: Low
+                due_diligence_level: CDD
+                periodic_kyc_review_due: '2036-09-01'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: client_id
+        in: path
+        required: true
+        schema:
+          type: string
+  /v1/kyc/reviews/due:
+    get:
+      tags:
+      - Accounts
+      summary: Periodic KYC reviews due
+      description: Lists clients due for re-KYC based on risk-based review cycle (High 2y / Medium 8y / Low 10y) and expiring
+        documents.
+      operationId: periodic_kyc_reviews_due
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        client_id:
+                          type: string
+                        name:
+                          type: string
+                        review_due:
+                          type: string
+                        reason:
+                          type: string
+              example:
+                data:
+                - client_id: CL000004
+                  name: Kiran Sheikh
+                  review_due: '2036-09-01'
+                  reason: Periodic
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+      parameters:
+      - name: due_before
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: aml_risk_rating
+        in: query
+        required: false
+        schema:
+          type: string
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    Error:
+      type: object
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        field_errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              issue:
+                type: string
+        request_id:
+          type: string
+  responses:
+    BadRequest:
+      description: Malformed request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: BAD_REQUEST
+            message: Malformed request
+            request_id: req_8f2a91c0d1
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: UNAUTHORIZED
+            message: Missing or invalid token
+            request_id: req_8f2a91c0d1
+    Unprocessable:
+      description: Business validation failed (e.g. PAN-name mismatch, nominee shares ≠ 100)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error_code: VALIDATION_FAILED
+            message: Business validation failed (e.g. PAN-name mismatch, nominee shares ≠ 100)
+            request_id: req_8f2a91c0d1
+x-webhooks:
+  events:
+    group: Webhooks
+    method: POST
+    path: '{partner_callback_url}'
+    summary: Event notifications
+    description: 'Signed (HMAC-SHA256) events: application.stage_changed, kyc.kra_status_changed, document.rejected, screening.match_found,
+      esign.completed, account.activated. Retries with exponential back-off for 24h.'
+    request: null
+    response:
+      event: account.activated
+      event_id: evt_01J9X
+      occurred_at: '2026-09-10T11:02:00+05:30'
+      data:
+        application_id: APP2600004
+        account_id: PMS-NDISC-596564
+    downstream: —
+    success_status: 200
+    params: []
