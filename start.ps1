@@ -33,7 +33,7 @@ Write-Host '  Covasant - WealthGate Onboarding & KYC' -ForegroundColor Blue
 Write-Host ''
 
 # --- dependencies ---------------------------------------------------------
-python -c "import fastapi, uvicorn, psycopg2, openpyxl" 2>$null
+python -c "import fastapi, uvicorn, psycopg2, openpyxl, multipart, rapidocr_onnxruntime, pymupdf" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host '  installing Python dependencies...' -ForegroundColor Yellow
     python -m pip install -r backend/requirements.txt --quiet

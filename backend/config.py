@@ -38,6 +38,14 @@ APP_PORT = int(os.environ.get("APP_PORT", "8000"))
 # localhost, or the browser will never send it back.
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes"}
 
+# Aadhaar numbers are never stored in clear — only masked, plus an
+# HMAC-SHA256 under this key so the form and the card can be compared.
+# Changing the key makes existing hashes uncomparable; keep it stable.
+AADHAAR_HMAC_KEY = os.environ.get("AADHAAR_HMAC_KEY", "")
+
+# Per-file limit for New Report uploads.
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "10"))
+
 
 def _dsn(dbname: str) -> str:
     parts = [

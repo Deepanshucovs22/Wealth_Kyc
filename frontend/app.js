@@ -24,22 +24,6 @@ const num = n => n == null ? '—' : Number(n).toLocaleString('en-IN');
 // API emits ISO-8601 ("2026-09-23T22:56:00"); show it to the minute.
 const dt = s => s ? String(s).slice(0, 16).replace('T', ' ') : '—';
 
-const pill = s => {
-  if (s == null || s === '') return '<span class="pill">—</span>';
-  const good = /Activated|Verified|Active|No Match|Completed|Signed|Validated|Registered|Low|Cleared|Captured|Success/i;
-  const warn = /Pending|Review|Hold|Uploaded|Medium|Potential|Screening|IPV|Draft|Fetch|Not Started|Under|Exempt/i;
-  const bad = /Reject|Fail|High|True Match|Mismatch|Not Found|Error/i;
-  const cls = bad.test(s) ? 'p-bad' : good.test(s) ? 'p-ok' : warn.test(s) ? 'p-warn' : '';
-  return `<span class="pill ${cls}">${esc(s)}</span>`;
-};
-
-// HTTP status codes colour by class, not by the word-matching rules above.
-const statusPill = code => {
-  const n = Number(code);
-  const cls = n >= 500 ? 'p-bad' : n >= 400 ? 'p-warn' : n >= 200 && n < 300 ? 'p-ok' : '';
-  return `<span class="pill ${cls}">${esc(code)}</span>`;
-};
-
 let toastTimer;
 const toast = m => {
   const t = $('#toast');
@@ -68,14 +52,6 @@ const api = async (path, opts) => {
 };
 
 let ME = null;           // the signed-in user
-let REF = null;          // reference data (loaded once)
-let EPS = [];            // API catalogue (loaded once, drives traces + explorer)
-const bundles = new Map(); // client_id -> full KYC 360 bundle
-
-const bundle = async id => {
-  if (!bundles.has(id)) bundles.set(id, await api(`/clients/${id}/kyc-summary`));
-  return bundles.get(id);
-};
 
 const loading = () =>
   `<div class="loading"><div class="skel"></div><div class="skel"></div>
@@ -84,52 +60,49 @@ const loading = () =>
 const failure = e =>
   `<h1>Something went wrong</h1><div class="sub">The screen could not load its data.</div>
    <div class="card"><div class="banner bad">${esc(e.message)}</div>
-   <div class="note">Check that PostgreSQL is running and that the <code>wealth_kyc</code>
-   database has been loaded — <code>python etl/load_excel_to_pg.py</code>.</div>
+   <div class="note">Check that PostgreSQL is running and that the server can reach the
+   <code>wealth_kyc</code> database.</div>
    <div class="row" style="margin-top:12px"><button class="btn" onclick="go(view)">Retry</button></div></div>`;
 
 const srcLine = (...q) =>
   `<div class="src"><span class="dot"></span>Live from PostgreSQL
-   <code>wealth_kyc.kyc</code> · ${q.map(x => `<code>${esc(x)}</code>`).join(' · ')}</div>`;
+   <code>wealth_kyc</code> · ${q.map(x => `<code>${esc(x)}</code>`).join(' · ')}</div>`;
 
 /* ------------------------------------------------------------------- nav */
 const ICON = {
   dash: 'M3 13h8V3H3v10Zm0 8h8v-6H3v6Zm10 0h8V11h-8v10Zm0-18v6h8V3h-8Z',
   queue: 'M3 5h18M3 12h18M3 19h18',
-  new: 'M12 5v14M5 12h14',
-  kyc360: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-8 9a8 8 0 0 1 16 0',
-  alerts: 'M12 3 2 20h20L12 3Zm0 6v5m0 3v.5',
-  rekyc: 'M21 12a9 9 0 1 1-3-6.7M21 4v5h-5'
+  report: 'M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8l-5-5Zm0 0v5h5M9 13h6M9 17h4',
+  plus: 'M12 5v14M5 12h14',
+  shield: 'M12 3 4.5 6v5.5c0 4.4 3.1 8.2 7.5 9.5 4.4-1.3 7.5-5.1 7.5-9.5V6L12 3Zm-3 9 2 2 4-4',
+  refresh: 'M20 11a8 8 0 0 0-14.3-4.9L4 8m0-4v4h4m-4 5a8 8 0 0 0 14.3 4.9L20 16m0 4v-4h-4',
+  back: 'M15 18l-6-6 6-6',
+  upload: 'M12 15V4m0 0L8 8m4-4 4 4M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4'
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="${ICON[k]}"/></svg>`;
 
 const NAV = [
-  ['Workspace'],
   ['dash', 'Dashboard'],
   ['queue', 'Onboarding Queue', 'queue'],
-  ['new', 'New Account'],
-  ['Compliance'],
-  ['kyc360', 'Client KYC 360'],
-  ['alerts', 'Screening Alerts', 'alerts'],
-  ['rekyc', 'Re-KYC Due', 'rekyc']
+  ['report', 'New Account']
 ];
 
-let view = 'dash', cur = null;
+let view = 'dash';
 const badges = {};
 
 function nav() {
   $('#nav').innerHTML = NAV.map(n => {
     if (n.length === 1) return `<div class="sec">${n[0]}</div>`;
     const b = n[2] && badges[n[2]] != null ? `<span class="count">${badges[n[2]]}</span>` : '';
-    return `<a class="${view === n[0] ? 'on' : ''}" data-v="${n[0]}">${svg(n[0])}${n[1]}${b}</a>`;
+    const on = view === n[0] || (view === 'session' && n[0] === 'queue');
+    return `<a class="${on ? 'on' : ''}" data-v="${n[0]}" title="${n[1]}">${svg(n[0])}<span class="lbl">${n[1]}</span>${b}</a>`;
   }).join('');
   $$('nav a').forEach(a => a.onclick = () => go(a.dataset.v));
 }
 
-async function go(v, arg) {
+async function go(v) {
   view = v;
-  if (arg) cur = arg;
   nav();
   $('#main').innerHTML = loading();
   window.scrollTo(0, 0);
@@ -141,616 +114,716 @@ async function go(v, arg) {
   }
 }
 
-/* ----------------------------------------------------------- API tracing */
-function trace(eps) {
-  const found = eps.map(([m, p]) => EPS.find(x => x.method === m && x.path === p)).filter(Boolean);
-  if (!found.length) return '';
-  return `<details class="trace card"><summary>API trace (${found.length} endpoint${found.length > 1 ? 's' : ''})</summary>
-  ${found.map(e => `<div style="margin-top:12px">
-    <div class="row"><span class="m ${e.method}">${e.method}</span>
-      <code class="mono">${esc(e.path)}</code>
-      <span class="mut">→ ${esc(e.downstream)}</span>
-      <span style="margin-left:auto">${statusPill(e.success_status)}</span></div>
-    <div class="grid g2" style="margin-top:8px">
-      <pre>${e.request ? esc(JSON.stringify(e.request, null, 2)) : '// no request body'}</pre>
-      <pre>${esc(JSON.stringify(e.response, null, 2))}</pre></div></div>`).join('')}
-  </details>`;
-}
-
 const R = {};
+
+// Page header used by every screen: icon tile, title and subtitle, actions right.
+const head = (icon, title, sub, actions = '') => `
+  <div class="phead"><span class="ptile">${svg(icon)}</span>
+    <div class="ptext"><h1>${title}</h1><div class="sub">${sub}</div></div>
+    ${actions ? `<div class="pact">${actions}</div>` : ''}</div>`;
+const newReportBtn = `<button class="btn pri" onclick="go('report')">${svg('plus')} New Account</button>`;
+
+/* ======================================================= REPORT OUTCOMES
+   Dashboard and queue show only reports submitted through New Account.
+   Each report carries one outcome, worked out on the server from the
+   form-vs-OCR comparison; the worst finding wins. */
+const OUTCOME = {
+  'Verified':       ['p-ok',   '✓', 'Every check matches the form and both cards are on file'],
+  'Needs Review':   ['p-warn', '!', 'Close but not exact, or a field could not be read'],
+  'Mismatch':       ['p-bad',  '✕', 'A card contradicts what was entered on the form'],
+  'Wrong Document': ['p-bad',  '✕', 'An upload is not the PAN or Aadhaar card it claims to be'],
+  'OCR Failed':     ['p-bad',  '✕', 'A card could not be read — blurred, blank or a locked PDF'],
+  'Incomplete':     ['p-warn', '…', 'Only one of PAN / Aadhaar was uploaded'],
+  'No Documents':   ['',       '–', 'Neither PAN nor Aadhaar was uploaded'],
+  'Pending':        ['p-acc',  '◷', 'OCR has not finished yet']
+};
+// Text label plus a symbol, so the state never rests on colour alone.
+const outPill = o => {
+  const [cls, sym, help] = OUTCOME[o] || ['', '', ''];
+  return `<span class="pill ${cls}" title="${esc(help)}">${sym} ${esc(o)}</span>`;
+};
+const docChips = have => [['PAN', 'P', 'PAN card'], ['AADHAAR', 'A', 'Aadhaar card'], ['SIGNATURE', 'S', 'Signature']]
+  .map(([k, l, t]) => `<span class="dchip ${have.includes(k) ? 'on' : ''}"
+    title="${t} ${have.includes(k) ? 'uploaded' : 'missing'}">${l}</span>`).join('');
+const ago = s => {
+  const m = Math.round((Date.now() - new Date(s)) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : dt(s);
+};
+const pctOf = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
+const muted0 = n => n ? `<b style="color:var(--deny)">${n}</b>` : '<span class="mut">0</span>';
 
 /* ============================================================= DASHBOARD */
 R.dash = async () => {
-  const d = await api('/dashboard');
-  const k = d.kpis;
-  const mx = Math.max(1, ...d.pipeline.map(p => p.applications));
-  const tatMax = Math.max(1, ...d.tat_trend.map(t => Number(t.avg_tat_days) || 0));
+  const d = await api('/kyc-sessions/dashboard');
+  const t = d.totals;
+  badges.queue = t.attention || null;
+  nav();
+
+  if (!t.reports) {
+    $('#main').innerHTML = `${head('dash', 'Onboarding Dashboard', 'KYC reports submitted through New Account', newReportBtn)}
+      <div class="card empty"><b>No reports yet</b>
+        <div class="mut">Figures appear here as soon as the first KYC report is submitted.</div>
+        <button class="btn pri" onclick="go('report')">+ New Account</button></div>`;
+    return;
+  }
+
+  const outs = d.outcomes.filter(o => o.reports || ['Verified', 'Needs Review', 'Mismatch'].includes(o.outcome));
+  const omax = Math.max(1, ...outs.map(o => o.reports));
+  const tmax = Math.max(1, ...d.trend.map(x => x.reports));
+  const day = s => new Date(s + 'T00:00');
 
   $('#main').innerHTML = `
-  <h1>Onboarding Dashboard</h1>
-  <div class="sub">${esc(d.period.from_date)} → ${esc(d.period.to_date)} · all branches · ${num(k.applications)} applications</div>
+  ${head('dash', 'Onboarding Dashboard', `KYC reports submitted through New Account · as of
+    ${new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}`, newReportBtn)}
 
   <div class="grid g4">
-    <div class="card kpi"><div class="l cap">Applications</div><div class="v">${num(k.applications)}</div>
-      <div class="foot">${d.by_rm.length} relationship managers</div></div>
-    <div class="card kpi"><div class="l cap">Accounts activated</div><div class="v">${num(k.activated)}</div>
-      <div class="foot">${inr(k.aum_onboarded_inr)} AUM onboarded</div></div>
-    <div class="card kpi"><div class="l cap">In compliance / eSign</div><div class="v">${num(k.in_compliance_or_esign)}</div>
-      <div class="foot">awaiting review or signature</div></div>
-    <div class="card kpi"><div class="l cap">Open screening hits</div><div class="v">${num(k.open_screening_hits)}</div>
-      <div class="foot">${num(k.high_risk_clients)} high-risk clients (EDD)</div></div>
+    <div class="card kpi"><div class="l cap">Reports submitted</div><div class="v">${num(t.reports)}</div>
+      <div class="foot">${num(t.today)} today · ${num(t.last_7_days)} in the last 7 days</div></div>
+    <div class="card kpi"><div class="l cap">Verified</div><div class="v">${num(t.verified)}</div>
+      <div class="foot">${pctOf(t.verified, t.processed)} of ${num(t.processed)} checked by OCR</div></div>
+    <a class="card kpi link ${t.attention ? 'alert' : ''}" id="kAttn">
+      <div class="l cap">Needs attention</div><div class="v">${num(t.attention)}</div>
+      <div class="foot">mismatch, wrong document or unreadable →</div></a>
+    <a class="card kpi link" id="kMiss">
+      <div class="l cap">Missing documents</div><div class="v">${num(t.incomplete)}</div>
+      <div class="foot">PAN or Aadhaar card not uploaded →</div></a>
   </div>
 
   <div class="grid g2" style="margin-top:14px">
-    <div class="card"><b>Pipeline by stage</b>
-      ${d.pipeline.map(p => `<div class="row" style="margin-top:9px;gap:8px">
-        <span style="width:146px;font-size:12px">${esc(p.stage)}</span>
-        <div class="bar" style="flex:1"><span style="width:${p.applications / mx * 100}%"></span></div>
-        <span style="width:30px;text-align:right;font-weight:600">${p.applications}</span></div>`).join('')}
+    <div class="card"><b>Verification outcome</b>
+      <div class="mut" style="font-size:11.5px">One result per report · click a row to open those reports</div>
+      ${outs.map(o => `<div class="orow" data-o="${esc(o.outcome)}" title="${esc(OUTCOME[o.outcome][2])}">
+        <span class="ol">${outPill(o.outcome)}</span>
+        <div class="bar ${OUTCOME[o.outcome][0]}"><span style="width:${o.reports / omax * 100}%"></span></div>
+        <span class="on">${o.reports}</span></div>`).join('')}
     </div>
 
-    <div class="card"><b>By relationship manager</b>
-      <table style="margin-top:8px"><thead><tr><th>RM</th><th>Branch</th><th>Apps</th><th>Activated</th><th>Conv.</th></tr></thead>
-      <tbody>${d.by_rm.map(r => `<tr><td><b>${esc(r.rm_name)}</b></td><td class="mut">${esc(r.branch)}</td>
-        <td>${r.applications}</td><td>${r.activated}</td>
-        <td>${pill(r.conversion_pct + '%')}</td></tr>`).join('')}</tbody></table>
-
-      <div style="margin-top:16px"><b>Average turnaround by cohort</b>
-        ${d.tat_trend.map(t => `<div class="row" style="margin-top:8px;gap:8px">
-          <span style="width:74px;font-size:12px">${esc(t.month)}</span>
-          <div class="bar" style="flex:1"><span style="width:${(Number(t.avg_tat_days) || 0) / tatMax * 100}%"></span></div>
-          <span style="width:76px;text-align:right;font-size:12px">${t.avg_tat_days} d · ${t.applications}</span>
-        </div>`).join('')}
-        <div class="note">Days from application created to last update, by month of creation.</div>
-      </div>
+    <div class="card"><b>Where checks fail</b>
+      <div class="mut" style="font-size:11.5px">Form compared with the PAN and Aadhaar cards, counted once per report</div>
+      <table style="margin-top:8px"><thead><tr><th>Field</th><th>Checked</th><th>Match rate</th>
+        <th>Review</th><th>Mismatch</th></tr></thead><tbody>
+      ${d.fields.map(f => `<tr><td><b>${esc(f.field)}</b></td><td>${f.checked}</td>
+        <td><div class="row" style="gap:8px;flex-wrap:nowrap" title="${f.match} of ${f.checked} match">
+          <div class="bar" style="width:90px"><span style="width:${f.checked ? f.match / f.checked * 100 : 0}%"></span></div>
+          ${pctOf(f.match, f.checked)}</div></td>
+        <td>${f.review || '<span class="mut">0</span>'}</td><td>${muted0(f.mismatch)}</td></tr>`).join('')}
+      </tbody></table>
     </div>
   </div>
-  ${srcLine('v_dashboard_kpis', 'v_pipeline_by_stage', 'v_rm_performance')}`;
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card"><b>Reports per day</b><div class="mut" style="font-size:11.5px">Last 14 days</div>
+      <div class="cols">${d.trend.map(x => `<div class="col"
+        title="${day(x.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}: ${x.reports} report${x.reports === 1 ? '' : 's'}">
+        <em>${x.reports || ''}</em><span style="height:${x.reports / tmax * 100}%"></span>
+        <small>${day(x.date).getDate()}</small></div>`).join('')}</div>
+    </div>
+
+    <div class="card"><div class="row"><b>Needs attention</b>
+      <a class="mut" id="allAttn" style="margin-left:auto;cursor:pointer">View all →</a></div>
+      ${d.attention.length ? `<table style="margin-top:8px"><tbody>
+        ${d.attention.map(a => `<tr class="click" data-sid="${esc(a.session_id)}">
+          <td><b>${esc(a.full_name)}</b><div class="mut mono" style="font-size:11px">${esc(a.session_id)}</div></td>
+          <td>${outPill(a.outcome)}<div class="mut" style="font-size:11px;margin-top:3px;white-space:normal">${esc(a.flags.join(', '))}</div></td>
+          <td class="mut" style="text-align:right">${ago(a.created_at)}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="ph" style="margin-top:10px;min-height:70px">Nothing waiting — every report is verified or complete.</div>'}
+    </div>
+  </div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card"><b>By submitter</b>
+      <table style="margin-top:8px"><thead><tr><th>Staff member</th><th>Reports</th><th>Verified</th>
+        <th>Needs attention</th></tr></thead><tbody>
+      ${d.by_user.map(p => `<tr><td><b>${esc(p.name)}</b></td><td>${p.reports}</td>
+        <td>${p.verified} <span class="mut">(${pctOf(p.verified, p.reports)})</span></td>
+        <td>${muted0(p.attention)}</td></tr>`).join('')}
+      </tbody></table>
+    </div>
+
+    <div class="card"><b>OCR reading quality</b>
+      <table style="margin-top:8px"><thead><tr><th>Card</th><th>Read</th><th>Avg. confidence</th>
+        <th>Avg. time</th><th>Wrong doc.</th><th>Unreadable</th></tr></thead><tbody>
+      ${d.ocr.length ? d.ocr.map(o => `<tr><td><b>${o.doc_type === 'PAN' ? 'PAN card' : 'Aadhaar card'}</b></td>
+        <td>${o.cards}</td><td>${o.avg_confidence != null ? Math.round(o.avg_confidence * 100) + '%' : '—'}</td>
+        <td>${o.avg_ms != null ? (o.avg_ms / 1000).toFixed(1) + ' s' : '—'}</td>
+        <td>${muted0(o.wrong_document)}</td><td>${muted0(o.unreadable)}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="mut">No cards read yet</td></tr>'}
+      </tbody></table>
+      <div class="note">Latest OCR attempt per card. Low confidence usually means a blurred or angled photo.</div>
+    </div>
+  </div>`;
+
+  const toQueue = o => { qf = { q: '', outcome: o }; go('queue'); };
+  $('#kAttn').onclick = () => toQueue('attention');
+  $('#allAttn').onclick = () => toQueue('attention');
+  $('#kMiss').onclick = () => toQueue('Incomplete');
+  $$('.orow').forEach(r => r.onclick = () => toQueue(r.dataset.o));
+  $$('tr[data-sid]').forEach(r => r.onclick = () => openSession(r.dataset.sid));
 };
 
 /* ================================================================= QUEUE */
-let qf = { stage: '', type: '', q: '' };
+let qf = { q: '', outcome: '' };
 
 R.queue = async () => {
-  const stages = REF.onboarding_stages, types = REF.client_types;
   $('#main').innerHTML = `
-  <h1>Onboarding Queue</h1>
-  <div class="sub">Click any row to open the Client KYC 360 · filters run as SQL on the server</div>
+  ${head('queue', 'Onboarding Queue', 'Every submitted KYC report with its verification result · click a row to open it', newReportBtn)}
   <div class="card">
-    <div class="row" style="margin-bottom:12px">
-      <input type="text" id="qq" placeholder="Name / PAN / Application ID" value="${esc(qf.q === '' ? '' : qf.q)}" style="min-width:230px">
-      <select id="qs"><option value="">All stages</option>
-        ${stages.map(s => `<option ${qf.stage === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
-      <select id="qt"><option value="">All client types</option>
-        ${types.map(s => `<option ${qf.type === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+    <div class="row" style="margin-bottom:10px">
+      <input type="text" id="qq" placeholder="Name, PAN or KYC session ID" value="${qf.q ? esc(qf.q) : ''}" style="min-width:260px">
       <span class="mut" id="qc"></span>
-      <button class="btn pri" style="margin-left:auto" onclick="go('new')">+ New Account</button>
     </div>
-    <div class="scroll"><table><thead><tr>
-      <th>App ID</th><th>Client</th><th>Type</th><th>PAN</th><th>KRA</th>
-      <th>Stage</th><th>AML</th><th>RM</th><th>Updated</th>
-    </tr></thead><tbody id="qb"></tbody></table></div>
-  </div>
-  ${trace([['GET', '/v1/onboarding/applications']])}
-  ${srcLine('clients')}`;
+    <div class="row fchips" id="qo"></div>
+    <div class="scroll" style="margin-top:12px"><table><thead><tr>
+      <th>KYC session</th><th>Customer</th><th>PAN</th><th>Aadhaar</th><th>Documents</th>
+      <th>Verification</th><th>Issues</th><th>Submitted by</th><th>Submitted</th>
+    </tr></thead><tbody id="qb"><tr><td colspan="9" class="mut">Loading…</td></tr></tbody></table></div>
+  </div>`;
 
   let seq = 0;
   const draw = async () => {
     const mine = ++seq;
     const p = new URLSearchParams();
-    if (qf.stage) p.set('stage', qf.stage);
-    if (qf.type) p.set('client_type', qf.type);
     if (qf.q) p.set('q', qf.q);
-    const res = await api('/applications?' + p);
-    if (mine !== seq) return;            // a newer keystroke already won
+    if (qf.outcome) p.set('outcome', qf.outcome);
+    const res = await api('/kyc-sessions?' + p);
+    if (mine !== seq || view !== 'queue') return;      // a newer request already won
 
-    $('#qc').textContent = `${res.total} result${res.total === 1 ? '' : 's'}`
+    const all = Object.values(res.counts).reduce((a, b) => a + b, 0);
+    if (!qf.q) { badges.queue = res.attention || null; nav(); }
+    const chips = [['', 'All', all], ['attention', 'Needs attention', res.attention]]
+      .concat(Object.entries(res.counts).filter(([o, n]) => n || o === 'Verified').map(([o, n]) => [o, o, n]));
+    $('#qo').innerHTML = chips.map(([v, l, n]) => `<button class="fchip ${qf.outcome === v ? 'on' : ''}" data-v="${v ? esc(v) : ''}">
+      ${esc(l)} <b>${n}</b></button>`).join('');
+    $$('#qo .fchip').forEach(b => b.onclick = () => { qf.outcome = b.dataset.v; draw(); });
+
+    $('#qc').textContent = `${res.total} report${res.total === 1 ? '' : 's'}`
       + (res.returned < res.total ? ` (showing ${res.returned})` : '');
-    $('#qb').innerHTML = res.items.length ? res.items.map(c => `
-      <tr class="click" data-id="${c.client_id}">
-        <td class="mono">${esc(c.application_id)}</td>
-        <td><b>${esc(c.name)}</b></td>
-        <td>${esc(c.client_type)}</td>
-        <td><code>${esc(c.pan)}</code></td>
-        <td>${pill(c.kra_status)}</td>
-        <td>${pill(c.onboarding_stage)}</td>
-        <td>${pill(c.aml_risk_rating)}</td>
-        <td>${esc(c.rm_name)}</td>
-        <td class="mut">${dt(c.last_updated_at)}</td></tr>`).join('')
-      : `<tr><td colspan="9" class="mut" style="padding:24px;text-align:center">No applications match these filters.</td></tr>`;
-    $$('#qb tr[data-id]').forEach(r => r.onclick = () => go('kyc360', r.dataset.id));
+    $('#qb').innerHTML = res.items.length ? res.items.map(x => `
+      <tr class="click" data-sid="${esc(x.session_id)}">
+        <td class="mono">${esc(x.session_id)}</td>
+        <td><b>${esc(x.full_name)}</b><div class="mut" style="font-size:11px">${esc([x.city, x.state].filter(Boolean).join(', '))}</div></td>
+        <td><code>${esc(x.pan)}</code></td>
+        <td class="mono">${esc(x.aadhaar_masked)}</td>
+        <td style="white-space:nowrap">${docChips(x.documents)}</td>
+        <td>${outPill(x.outcome)}</td>
+        <td class="mut" style="white-space:normal;min-width:140px">${x.flags.length ? esc(x.flags.join(', ')) : '—'}</td>
+        <td>${esc(x.created_by_name)}</td>
+        <td class="mut" title="${esc(dt(x.created_at))}">${ago(x.created_at)}</td></tr>`).join('')
+      : `<tr><td colspan="9" class="mut" style="padding:24px;text-align:center">
+          ${all ? 'No reports match these filters.' : 'No reports submitted yet — use <b>+ New Account</b> to add the first one.'}</td></tr>`;
+    $$('#qb tr[data-sid]').forEach(r => r.onclick = () => openSession(r.dataset.sid));
   };
 
   let debounce;
   $('#qq').oninput = e => {
-    qf.q = e.target.value;
+    qf.q = e.target.value.trim();
     clearTimeout(debounce);
-    debounce = setTimeout(draw, 180);
+    debounce = setTimeout(draw, 200);
   };
-  $('#qs').onchange = e => { qf.stage = e.target.value; draw(); };
-  $('#qt').onchange = e => { qf.type = e.target.value; draw(); };
   await draw();
 };
 
-/* ======================================================== NEW ACCOUNT WIZARD */
-const STEPS = ['Client & Product', 'PAN & KYC Fetch', 'Personal & Address', 'FATCA / CRS',
-  'Bank', 'Demat', 'Nominee / UBO', 'Risk Profile', 'Documents', 'IPV',
-  'Screening', 'Agreement & eSign', 'Review & Submit'];
+/* =========================================================== NEW ACCOUNT
+   KYC intake form → POST /api/kyc-sessions (multipart). The server creates
+   the session id, stores form + files, runs OCR on PAN and Aadhaar, and
+   returns the whole session. The server re-validates everything below. */
+const STATES = ['Andaman and Nicobar Islands', 'Andhra Pradesh', 'Arunachal Pradesh', 'Assam',
+  'Bihar', 'Chandigarh', 'Chhattisgarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi',
+  'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jammu and Kashmir', 'Jharkhand', 'Karnataka',
+  'Kerala', 'Ladakh', 'Lakshadweep', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya',
+  'Mizoram', 'Nagaland', 'Odisha', 'Puducherry', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu',
+  'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal'];
+const REQUEST_TYPES = ['New User', 'Modification', 'Deletion', 'Duplicate Password'];
+const TXN_TYPES = [
+  ['A', 'Only between own linked accounts'],
+  ['B', 'Own accounts, third-party accounts, tax payment & power transfer, online payments'],
+  ['C', 'Only tax payment'],
+  ['TFConnect', 'Online trade-finance portal']];
+const MAX_MB = 10;
+const IMG = 'image/jpeg,image/png,image/webp';
+const SLOTS = [
+  ['pan_card', 'PAN card', 1, IMG + ',application/pdf', 'Front side · JPG, PNG or PDF · read by OCR'],
+  ['aadhaar_card', 'Aadhaar card', 2, IMG + ',application/pdf', 'Front and back, up to 2 files · read by OCR'],
+  ['signature', 'Signature', 1, IMG, 'Signed on white paper · JPG or PNG · stored only']];
 
-let W = { i: 0, done: new Set(), b: null, pan: '', type: null, prod: null, ans: {} };
+// Kept in memory until a successful submit or Reset, so leaving the page
+// and coming back does not lose a half-filled report.
+let RV = {};
+let UP = { pan_card: [], aadhaar_card: [], signature: [] };
+let thumbs = [];
 
-const F = (label, value, lock) => `<div class="field">
-  <label class="${lock ? 'lock' : ''}">${esc(label)}</label>
-  ${lock
-    ? `<div class="ro ${value != null && value !== '' ? 'filled' : ''}">${esc(value)}</div>`
-    : `<input type="text" value="${value == null ? '' : esc(value)}">`}</div>`;
+const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
-R.new = async () => {
-  if (!W.type) W.type = REF.client_types[0];
-  if (!W.prod) W.prod = REF.products[0].code;
+// UIDAI's Verhoeff check digit.
+const VD = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],
+  [4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],
+  [8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]];
+const VP = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],
+  [9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
+const verhoeff = n => [...n].reverse().reduce((c, d, i) => VD[c][VP[i % 8][+d]], 0) === 0;
 
-  const b = W.b, c = b && b.client, i = W.i;
-  const need = `<div class="ph">Fetch KYC in step 2 first — or pick one of the sample PANs.</div>`;
-  let body = '', tr = [];
+// Rupees in words, Indian grouping (lakh / crore).
+function words(n) {
+  const a = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+    'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const two = x => x < 20 ? a[x] : b[Math.floor(x / 10)] + (x % 10 ? ' ' + a[x % 10] : '');
+  const three = x => [x >= 100 ? a[Math.floor(x / 100)] + ' Hundred' : '', two(x % 100)].filter(Boolean).join(' ');
+  const out = [];
+  const crore = Math.floor(n / 1e7); n %= 1e7;
+  if (crore) out.push((crore > 99 ? words(crore) : two(crore)) + ' Crore');
+  const lakh = Math.floor(n / 1e5); n %= 1e5;
+  if (lakh) out.push(two(lakh) + ' Lakh');
+  const th = Math.floor(n / 1e3); n %= 1e3;
+  if (th) out.push(two(th) + ' Thousand');
+  if (n) out.push(three(n));
+  return out.join(' ');
+}
+const inWords = v => {
+  if (v === '' || v == null || !isFinite(+v) || +v < 0) return '';
+  const n = Math.floor(+v);
+  return n === 0 ? 'Zero rupees' : words(n) + ' rupees only';
+};
 
-  if (i === 0) {
-    const prod = REF.products.find(p => p.code === W.prod);
-    body = `<div class="grid g3">
-      <div class="field"><label>Client type</label><select id="wt">
-        ${REF.client_types.map(t => `<option ${W.type === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
-      <div class="field"><label>Product</label><select id="wp">
-        ${REF.products.map(p => `<option value="${esc(p.code)}" ${W.prod === p.code ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
-      <div class="field"><label class="lock">Min. investment</label><div class="ro filled">${inr(prod.min_investment_inr)}</div></div>
-      <div class="field"><label>Relationship manager</label><select>
-        ${REF.relationship_managers.map(r => `<option>${esc(r.name)} (${esc(r.branch)})</option>`).join('')}</select></div>
-      <div class="field"><label>Channel</label><select>
-        <option>RM Assisted</option><option>Digital Self-Serve</option>
-        <option>Distributor</option><option>Family Office Referral</option></select></div>
-    </div>
-    <div class="note">Creates the application and returns the step / document checklist derived from
-    client type, residential status and product.</div>`;
-    tr = [['POST', '/v1/onboarding/applications']];
-  }
+const RULES = {
+  full_name: v => !v ? 'Name is required'
+    : !/^[A-Za-z][A-Za-z .'\-]{1,149}$/.test(v) ? "Use letters, spaces and . ' - only" : '',
+  date_of_birth: v => !v ? 'Date of birth is required'
+    : v > today() ? 'Date of birth cannot be in the future'
+      : v < '1900-01-01' ? 'Enter a valid date of birth' : '',
+  pan: v => !v ? 'PAN is required' : !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v) ? 'PAN must look like ABCDE1234F' : '',
+  aadhaar: v => {
+    const d = (v || '').replace(/[\s-]/g, '');
+    return !d ? 'Aadhaar number is required' : !/^\d{12}$/.test(d) ? 'Aadhaar must be 12 digits'
+      : !/^[2-9]/.test(d) || !verhoeff(d) ? 'Not a valid Aadhaar number — please re-check the digits' : '';
+  },
+  address_line1: v => v ? '' : 'Address is required',
+  city: v => v ? '' : 'City is required',
+  state: v => v ? '' : 'State is required',
+  pincode: v => !v ? 'PIN code is required' : !/^[1-9]\d{5}$/.test(v) ? 'PIN code must be 6 digits' : '',
+  mobile: v => v && !/^[6-9]\d{9}$/.test(v) ? 'Enter a 10-digit Indian mobile number' : '',
+  email: v => v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? 'Enter a valid email address' : '',
+  limit_per_transaction: (v, all) =>
+    v && all.limit_per_day && +v > +all.limit_per_day ? 'Cannot exceed the per-day limit' : ''
+};
 
-  if (i === 1) {
-    const samples = await api(`/sample-pans?client_type=${encodeURIComponent(W.type)}&limit=5`);
-    body = `<div class="row">
-      <div class="field" style="flex:1;max-width:290px"><label>PAN</label>
-        <input type="text" id="wpan" value="${esc(W.pan === '' ? '' : W.pan)}" placeholder="ABCDE1234F" style="text-transform:uppercase;font-family:var(--mono)"></div>
-      <button class="btn pri" id="wfetch" style="align-self:flex-end">Fetch KRA + CKYC</button></div>
-    <div class="row" style="margin-top:10px">
-      <span class="mut">Sample PANs on file (${esc(W.type)}):</span>
-      ${samples.map(s => `<span class="chip" data-p="${esc(s.pan)}" title="${esc(s.name)}">${esc(s.pan)}</span>`).join('')}</div>
-    <div id="wres" style="margin-top:14px">${b ? kycRes(b) : '<div class="ph">KRA / CKYC result appears here</div>'}</div>`;
-    tr = [['POST', '/v1/verification/pan'], ['GET', '/v1/kyc/kra/{pan}'],
-    ['GET', '/v1/kyc/ckyc/search'], ['POST', '/v1/kyc/ckyc/download'],
-    ['POST', '/v1/kyc/digilocker/consent']];
-  }
+// One labelled form field. `o.html` replaces the default <input>.
+const fld = (name, label, o = {}) => `
+  <div class="field" data-f="${name}"${o.span ? ` style="grid-column:span ${o.span}"` : ''}>
+    <label for="r_${name}">${label}${o.req ? ' <span class="req">*</span>' : ''}</label>
+    ${o.html || `<input type="${o.type || 'text'}" id="r_${name}" name="${name}" ${o.attrs || ''}>`}
+    ${o.hint ? `<div class="hint">${o.hint}</div>` : ''}
+    <div class="err"></div></div>`;
 
-  if (i === 2) {
-    body = !c ? need : `<div class="grid g3">
-      ${F('Name (as per PAN)', c.name, 1)}${F('Date of birth / incorporation', c.date_of_birth_or_incorporation, 1)}
-      ${F('Gender', c.gender, !!c.gender)}${F('Residential status', c.residential_status, 1)}
-      ${F('Mobile', c.mobile)}${F('Email', c.email)}${F('Occupation', c.occupation)}
-      ${F('Annual income', c.annual_income_band)}${F('Net worth', inr(c.net_worth_inr))}
-      ${F('Source of wealth', c.source_of_wealth)}${F('Address line 1', c.address_line1, 1)}
-      ${F('Address line 2', c.address_line2, 1)}${F('City', c.city, 1)}${F('State', c.state, 1)}
-      ${F('PIN / ZIP', c.pincode, 1)}${F('Country', c.country, 1)}</div>
-    <div class="note">🔒 fields are pre-filled from KRA / CKYC and locked — overriding one requires a
-    reason and triggers a KRA modification upload.</div>`;
-    tr = [['PATCH', '/v1/onboarding/applications/{application_id}']];
-  }
+const opts = (name, list) => `<div class="row opts">${list.map(([v, l]) => `
+  <label class="pill" data-v="${esc(v)}"><input type="radio" name="${name}" value="${esc(v)}">${esc(l)}</label>`).join('')}</div>`;
 
-  if (i === 3) {
-    const f = b && b.fatca_crs;
-    body = !c ? need : !f ? '<div class="ph">No FATCA / CRS record on file.</div>' : `<div class="grid g3">
-      ${F('Tax residency', f.tax_residencies)}${F('TIN / PAN', f.tin_or_pan)}
-      ${F('Place of birth', f.place_of_birth)}${F('US person?', f.us_person ? 'Yes' : 'No')}
-      ${F('Entity classification', f.fatca_entity_classification)}${F('GIIN', f.giin)}
-      ${F('Self-certification date', f.self_cert_date, 1)}${F('Declaration', f.declaration_status, 1)}</div>`;
-    tr = [['PUT', '/v1/onboarding/applications/{application_id}/fatca-crs']];
-  }
-
-  if (i === 4) {
-    body = !c ? need : `<table><thead><tr><th>Bank</th><th>IFSC</th><th>Account</th><th>Type</th>
-      <th>Primary</th><th>Penny drop</th><th>Name match</th><th>Verified</th></tr></thead><tbody>
-      ${b.bank_accounts.map(x => `<tr><td><b>${esc(x.bank_name)}</b></td><td class="mono">${esc(x.ifsc)}</td>
-        <td class="mono">${esc(x.account_number_masked)}</td><td>${esc(x.account_type)}</td>
-        <td>${x.is_primary ? '✓' : ''}</td><td>${pill(x.penny_drop_status)}</td>
-        <td>${x.name_match_score}%</td><td class="mut">${dt(x.verified_at)}</td></tr>`).join('')}
-      </tbody></table>
-      <div class="row" style="margin-top:12px">
-        <button class="btn" onclick="toast('₹1 penny drop sent via IMPS')">+ Add bank &amp; verify</button></div>`;
-    tr = [['POST', '/v1/verification/bank-account']];
-  }
-
-  if (i === 5) {
-    const d = b && b.demat;
-    body = !c ? need : !d ? '<div class="ph">No demat linkage on file.</div>' : `<div class="grid g3">
-      ${F('Depository', d.depository)}${F('DP', d.dp_name)}${F('DP ID', d.dp_id)}
-      ${F('Client ID / BO ID', d.client_id_at_dp)}${F('DDPI / POA', d.poa_ddpi)}${F('Status', d.status, 1)}</div>
-      <div class="ph" style="margin-top:12px;min-height:64px">Upload Client Master List (CML)</div>`;
-    tr = [['POST', '/v1/onboarding/applications/{application_id}/demat']];
-  }
-
-  if (i === 6) {
-    if (!c) body = need;
-    else if (b.ubos.length) {
-      body = `<b>Ultimate beneficial owners</b>
-      <table style="margin-top:8px"><thead><tr><th>Name</th><th>PAN</th><th>Holding</th>
-        <th>Role</th><th>Nationality</th><th>PEP</th></tr></thead><tbody>
-        ${b.ubos.map(x => `<tr><td><b>${esc(x.ubo_name)}</b></td><td class="mono">${esc(x.pan)}</td>
-          <td>${x.holding_pct}%</td><td>${esc(x.role)}</td><td class="mut">${esc(x.nationality)}</td>
-          <td>${x.pep_flag ? pill('PEP — High') : 'No'}</td></tr>`).join('')}</tbody></table>
-      <div class="note">Total declared holding: ${b.ubos.reduce((a, x) => a + x.holding_pct, 0)}%</div>`;
-    } else if (b.nominees.length) {
-      const total = b.nominees.reduce((a, x) => a + x.share_pct, 0);
-      body = `<b>Nominees</b>
-      <table style="margin-top:8px"><thead><tr><th>Name</th><th>Relationship</th><th>Share</th>
-        <th>Minor</th><th>ID type</th></tr></thead><tbody>
-        ${b.nominees.map(x => `<tr><td><b>${esc(x.nominee_name)}</b></td><td>${esc(x.relationship)}</td>
-          <td>${x.share_pct}%</td><td>${x.is_minor ? 'Yes (guardian required)' : 'No'}</td>
-          <td>${esc(x.id_type)}</td></tr>`).join('')}</tbody></table>
-      <div class="note">Total share: <b>${total}%</b> ${total === 100 ? '✓ valid' : '— must equal 100%'}</div>`;
-    } else {
-      body = `<div class="banner warn">Client opted out of nomination — a signed declaration
-        (video or eSign) is required before activation.</div>`;
-    }
-    tr = [['PUT', '/v1/onboarding/applications/{application_id}/nominees'],
-    ['PUT', '/v1/onboarding/applications/{application_id}/ubos']];
-  }
-
-  if (i === 7) {
-    const r = b && b.risk_profile;
-    const Q = [
-      ['Investment horizon', ['1-3 yrs', '3-5 yrs', '5-7 yrs', '> 7 yrs'], 'investment_horizon'],
-      ['Investment experience', ['None', '< 2 yrs', '2-5 yrs', '> 5 yrs'], 'investment_experience'],
-      ['Tolerable loss in a year', ['< 5%', '5-10%', '10-20%', '> 20%'], 'loss_tolerance'],
-      ['Liquidity need', ['High', 'Medium', 'Low'], 'liquidity_need']
-    ];
-    if (r) Q.forEach(q => { if (!(q[2] in W.ans)) W.ans[q[2]] = r[q[2]]; });
-    const sc = Q.reduce((a, q) => a + (q[1].indexOf(W.ans[q[2]]) + 1) * 3, 6);
-    const cat = sc < 26 ? 'Conservative' : sc < 33 ? 'Moderate'
-      : sc < 40 ? 'Moderately Aggressive' : 'Aggressive';
-    const unsuitable = cat === 'Conservative' && W.prod.startsWith('AIF-CAT3');
-
-    body = `<div class="grid g2"><div>
-      ${Q.map(q => `<div class="field" style="margin-bottom:12px"><label>${esc(q[0])}</label>
-        <div class="row">${q[1].map(o => `<label class="pill ${W.ans[q[2]] === o ? 'p-acc' : ''}" style="cursor:pointer">
-          <input type="radio" name="${q[2]}" value="${esc(o)}" ${W.ans[q[2]] === o ? 'checked' : ''} style="display:none">${esc(o)}</label>`).join('')}
-        </div></div>`).join('')}</div>
-      <div class="card" style="background:var(--panel2)">
-        <div class="mut">Questionnaire ${esc(r ? r.questionnaire_version : 'RPQ-v3.2')}</div>
-        <div class="kpi" style="margin-top:6px"><div class="v">${sc}</div><div class="l">score</div></div>
-        <div style="margin:10px 0">${pill(cat)}</div>
-        <div class="bar"><span style="width:${(sc - 6) / 42 * 100}%"></span></div>
-        ${r ? `<div class="note">On file: score <b>${r.score}</b> · ${esc(r.risk_category)} ·
-          completed ${esc(r.completed_on)} · suitability ${r.suitability_ok ? 'OK' : '<b style="color:var(--deny)">not met</b>'}</div>` : ''}
-        <div class="note">Suitability vs ${esc(W.prod)}:
-          ${unsuitable ? '<b style="color:var(--deny)">Not suitable — requires documented override</b>' : 'OK'}</div>
-      </div></div>`;
-    tr = [['GET', '/v1/risk-profile/questionnaire'],
-    ['POST', '/v1/onboarding/applications/{application_id}/risk-profile']];
-  }
-
-  if (i === 8) {
-    body = !c ? need : `<table><thead><tr><th>Document</th><th>Source</th><th>OCR conf.</th>
-      <th>Status</th><th>Expiry</th><th>Remarks</th><th></th></tr></thead><tbody>
-      ${b.documents.map(d => `<tr><td><b>${esc(d.document_type)}</b></td><td>${esc(d.source)}</td>
-        <td>${d.ocr_confidence != null ? Math.round(d.ocr_confidence * 100) + '%' : '—'}</td>
-        <td>${pill(d.status)}</td><td class="mut">${esc(d.expiry_date)}</td>
-        <td class="mut">${esc(d.rejection_reason)}</td>
-        <td><button class="btn sm" onclick="toast('Upload dialog (mock)')">Upload</button></td></tr>`).join('')}
-      </tbody></table>`;
-    tr = [['POST', '/v1/onboarding/applications/{application_id}/documents'],
-    ['GET', '/v1/onboarding/applications/{application_id}/documents'],
-    ['PATCH', '/v1/documents/{document_id}']];
-  }
-
-  if (i === 9) {
-    body = !c ? need : `<div class="grid g2">
-      <div class="ph" style="min-height:230px">Live video feed · liveness detection · random code read-out</div>
-      <div class="grid">${F('IPV mode', c.ipv_mode, 1)}${F('Status', c.ipv_status, 1)}
-        ${F('Liveness score', c.liveness_score, 1)}${F('Geo-tag', 'Within India ✓', 1)}
-        <button class="btn pri" onclick="toast('VIPV link sent to client')">Send VIPV link</button></div></div>`;
-    tr = [['POST', '/v1/verification/ipv/sessions'],
-    ['GET', '/v1/verification/ipv/sessions/{ipv_session_id}']];
-  }
-
-  if (i === 10) {
-    body = !c ? need : `<div class="row" style="margin-bottom:10px">AML risk rating: ${pill(c.aml_risk_rating)}
-      · Due diligence: <b>${esc(c.due_diligence_level)}</b> ${c.pep_flag ? pill('PEP') : ''}</div>
-      <table><thead><tr><th>List</th><th>Result</th><th>Score</th><th>Matched name</th>
-        <th>Disposition</th><th>Reviewer</th></tr></thead><tbody>
-      ${b.screening.map(s => `<tr><td>${esc(s.list_name)}</td><td>${pill(s.result)}</td>
-        <td>${s.match_score}</td><td class="mut">${esc(s.matched_name)}</td>
-        <td>${s.disposition ? pill(s.disposition) : '—'}</td><td>${esc(s.reviewer)}</td></tr>`).join('')}
-      </tbody></table>`;
-    tr = [['POST', '/v1/screening/run'], ['POST', '/v1/screening/{screening_id}/disposition']];
-  }
-
-  if (i === 11) {
-    body = !c ? need : `<div class="grid g2">
-      <div class="ph" style="min-height:230px">Agreement PDF preview · PMS client agreement · fee schedule · AOF</div>
-      <div class="grid">${F('eSign mode', c.esign_mode, 1)}${F('eSign status', c.esign_status, 1)}
-        ${b.accounts.map(a => F('Fee — ' + a.product_code, a.fee_structure, 1)).join('')}
-        <button class="btn pri" onclick="toast('eSign request sent')">Send for eSign</button></div></div>`;
-    tr = [['POST', '/v1/onboarding/applications/{application_id}/agreements'],
-    ['POST', '/v1/esign/requests'], ['GET', '/v1/esign/requests/{esign_request_id}']];
-  }
-
-  if (i === 12) {
-    body = !c ? need : `<div class="grid g3">
-      ${STEPS.slice(0, 12).map((s, k) => `<div class="row">
-        <span class="pill ${W.done.has(k) ? 'p-ok' : 'p-warn'}">${W.done.has(k) ? '✓' : '!'}</span>${esc(s)}</div>`).join('')}</div>
-      <div class="row" style="margin-top:16px">
-        <label style="cursor:pointer"><input type="checkbox" id="decl">
-          I confirm KYC was performed as per SEBI / PMLA norms</label>
-        <button class="btn pri" id="sub" style="margin-left:auto">Submit to Compliance</button></div>`;
-    tr = [['POST', '/v1/onboarding/applications/{application_id}/submit'],
-    ['POST', '/v1/onboarding/applications/{application_id}/decision'],
-    ['POST', '/v1/accounts']];
-  }
-
+R.report = async () => {
   $('#main').innerHTML = `
-  <h1>New Account Opening</h1>
-  <div class="sub">${c ? `${esc(c.name)} · ${esc(c.application_id)} · ` : ''}Step ${i + 1} of ${STEPS.length} — ${esc(STEPS[i])}</div>
-  <div class="steps">${STEPS.map((s, k) => `<div class="step ${k === i ? 'on' : ''} ${W.done.has(k) ? 'done' : ''}" data-k="${k}">
-    <b>${W.done.has(k) ? '✓' : k + 1}</b>${esc(s)}</div>`).join('')}</div>
-  <div class="card">${body}
+  ${head('report', 'New Account', `KYC onboarding · fields marked <span class="req">*</span> are mandatory ·
+    PAN and Aadhaar uploads are read by OCR when you submit`)}
+
+  <form class="card" id="rf" novalidate autocomplete="off">
+    <div class="fsec">1 · Details of customer</div>
+    <div class="grid g3">
+      ${fld('full_name', 'Customer name', { req: 1, attrs: 'maxlength="150" placeholder="As printed on PAN"' })}
+      ${fld('date_of_birth', 'Date of birth', { req: 1, type: 'date', attrs: `min="1900-01-01" max="${today()}"` })}
+      ${fld('customer_id', 'Customer ID', { attrs: 'maxlength="30" placeholder="If existing customer"' })}
+      ${fld('mobile', 'Mobile number', { type: 'tel', attrs: 'maxlength="10" inputmode="numeric" placeholder="10 digits"' })}
+      ${fld('email', 'Official email ID', { type: 'email', attrs: 'maxlength="120" placeholder="name@company.com"' })}
+    </div>
+
+    <div class="fsec">2 · Identity</div>
+    <div class="grid g3">
+      ${fld('pan', 'PAN number', { req: 1, attrs: 'maxlength="10" class="mono up" placeholder="ABCDE1234F"' })}
+      ${fld('aadhaar', 'Aadhaar number', { req: 1, attrs: 'maxlength="14" inputmode="numeric" class="mono" placeholder="1234 5678 9012"',
+        hint: 'Stored masked (XXXX XXXX 1234) — the full number is never saved' })}
+    </div>
+
+    <div class="fsec">3 · Address</div>
+    <div class="grid g3">
+      ${fld('address_line1', 'Address line 1', { req: 1, span: 2, attrs: 'maxlength="200" placeholder="House / flat, building, street"' })}
+      ${fld('address_line2', 'Address line 2', { attrs: 'maxlength="200" placeholder="Area, landmark"' })}
+      ${fld('city', 'City / district', { req: 1, attrs: 'maxlength="80"' })}
+      ${fld('state', 'State / UT', { req: 1, html: `<select id="r_state" name="state"><option value="">Select…</option>
+        ${STATES.map(s => `<option>${esc(s)}</option>`).join('')}</select>` })}
+      ${fld('pincode', 'PIN code', { req: 1, attrs: 'maxlength="6" inputmode="numeric" class="mono"' })}
+    </div>
+
+    <div class="fsec">4 · Internet banking request</div>
+    <div class="grid g3">
+      ${fld('request_type', 'Request type', { span: 3, html: opts('request_type', REQUEST_TYPES.map(t => [t, t])) })}
+      ${fld('existing_user_id', 'Existing user ID, if any', { attrs: 'maxlength="30"' })}
+      ${fld('preferred_user_id', 'Preferred user ID', { attrs: 'maxlength="30"',
+        hint: 'For new-user requests, subject to availability' })}
+    </div>
+
+    <div class="fsec">5 · Transaction limits (₹)</div>
+    <div class="grid g3">
+      ${fld('limit_per_day', 'Per day — in figures', { type: 'number', attrs: 'min="0" step="1" placeholder="0"' })}
+      ${fld('limit_words', 'Per day — in words', { span: 2, html: '<div class="ro" id="r_words"></div>' })}
+      ${fld('limit_per_transaction', 'Per transaction', { type: 'number', attrs: 'min="0" step="1" placeholder="0"' })}
+      ${fld('approvers_required', 'Approvers required', { html: `<select id="r_approvers_required" name="approvers_required">
+        <option value="">—</option><option>0</option><option>1</option><option>2</option></select>` })}
+      <div></div>
+      ${fld('transaction_type', 'Transaction type', { span: 3, html: opts('transaction_type', TXN_TYPES.map(([v]) => [v, v])),
+        hint: TXN_TYPES.map(([v, l]) => `<b>${esc(v)}</b>: ${esc(l)}`).join(' · ') + ' · not applicable to viewer profiles' })}
+    </div>
+
+    <div class="fsec">6 · Documents</div>
+    <div class="grid g3">
+      ${SLOTS.map(([key, label, max, accept, hint]) => fld(key, label, { html: `
+        <div class="drop" data-slot="${key}">
+          <div class="hd">${svg('upload')}<div><b>Drop ${max > 1 ? 'files' : 'a file'} here</b> or
+            <a class="pick" tabindex="0">browse</a><div class="mut">${esc(hint)}</div></div></div>
+          <input type="file" hidden accept="${accept}"${max > 1 ? ' multiple' : ''}>
+          <div class="files"></div>
+        </div>` })).join('')}
+    </div>
+
     <div class="row" style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
-      <button class="btn" id="wb" ${i === 0 ? 'disabled' : ''}>Back</button>
-      <button class="btn" onclick="toast('Draft saved')">Save draft</button>
-      <button class="btn pri" id="wn" style="margin-left:auto" ${i === 12 ? 'disabled' : ''}>Save &amp; continue</button>
-    </div></div>
-  ${trace(tr)}`;
+      <span class="mut" style="flex:1;min-width:240px">On submit a unique KYC session ID is created and the form,
+        documents and OCR results are all linked to it.</span>
+      <button type="button" class="btn" id="rreset">Reset</button>
+      <button type="submit" class="btn pri" id="rsubmit">Submit report</button>
+    </div>
+  </form>
 
-  $$('.step').forEach(s => s.onclick = () => { W.i = +s.dataset.k; R.new(); });
-  $('#wb').onclick = () => { W.i--; R.new(); };
-  $('#wn').onclick = () => { W.done.add(i); W.i++; R.new(); };
+  <div class="card" style="margin-top:14px">
+    <div class="row"><b>Recent reports</b><span class="mut" id="rcount"></span></div>
+    <div class="scroll" style="margin-top:8px"><table><thead><tr>
+      <th>Session ID</th><th>Customer</th><th>PAN</th><th>Aadhaar</th><th>Docs</th>
+      <th>Verification</th><th>Submitted by</th><th>Submitted</th></tr></thead>
+      <tbody id="rlist"><tr><td colspan="8" class="mut">Loading…</td></tr></tbody></table></div>
+  </div>
+  ${srcLine('kyc_intake.kyc_session', 'kyc_intake.kyc_form_data')}`;
 
-  if (i === 0) {
-    $('#wt').onchange = e => { W.type = e.target.value; W.b = null; W.pan = ''; W.ans = {}; R.new(); };
-    $('#wp').onchange = e => { W.prod = e.target.value; R.new(); };
+  const form = $('#rf');
+
+  // restore anything typed before leaving the page
+  Object.entries(RV).forEach(([k, v]) => {
+    const el = form.elements[k];
+    if (!el) return;
+    if (el instanceof RadioNodeList) { [...el].forEach(r => { r.checked = r.value === v; }); } else el.value = v;
+  });
+
+  const syncOpts = () => $$('.opts label').forEach(l => {
+    const r = l.querySelector('input');
+    l.classList.toggle('p-acc', r.checked);
+  });
+  const syncWords = () => { $('#r_words').textContent = inWords(form.elements.limit_per_day.value) || '—'; };
+  syncOpts(); syncWords();
+
+  form.addEventListener('input', e => {
+    const el = e.target;
+    if (!el.name) return;
+    if (el.name === 'pan') el.value = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (el.name === 'aadhaar') {
+      const d = el.value.replace(/\D/g, '').slice(0, 12);
+      el.value = d.replace(/(\d{4})(?=\d)/g, '$1 ');
+    }
+    if (['mobile', 'pincode'].includes(el.name)) el.value = el.value.replace(/\D/g, '');
+    RV[el.name] = el.value;
+    if (el.type === 'radio') syncOpts();
+    if (el.name === 'limit_per_day') syncWords();
+    if (el.closest('.field').classList.contains('bad')) check(el.name);
+  });
+  form.addEventListener('focusout', e => { if (e.target.name && RV[e.target.name] !== undefined) check(e.target.name); });
+
+  // Clicking a selected option again clears it (these fields are optional).
+  $$('.opts label').forEach(l => l.addEventListener('click', e => {
+    const r = l.querySelector('input');
+    if (r.checked && e.target === l) { e.preventDefault(); r.checked = false; delete RV[r.name]; syncOpts(); }
+  }));
+
+  function values() {
+    const v = {};
+    for (const [k, x] of new FormData(form)) if (typeof x === 'string') v[k] = x.trim();
+    return v;
+  }
+  function setErr(name, msg) {
+    const f = form.querySelector(`.field[data-f="${name}"]`);
+    if (!f) return;
+    f.classList.toggle('bad', !!msg);
+    f.querySelector('.err').textContent = msg || '';
+  }
+  function check(name) {
+    if (RULES[name]) setErr(name, RULES[name](values()[name] || '', values()));
   }
 
-  if (i === 1) {
-    const fetchPan = async () => {
-      const p = $('#wpan').value.trim().toUpperCase();
-      W.pan = p;
-      if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(p)) {
-        $('#wres').innerHTML = `<div class="banner bad">Invalid PAN format — expected AAAAA9999A</div>`;
+  // ---- uploads
+  thumbs.forEach(URL.revokeObjectURL);
+  thumbs = [];
+  const drawFiles = key => {
+    const box = form.querySelector(`.drop[data-slot="${key}"] .files`);
+    box.innerHTML = UP[key].map((f, i) => {
+      let pic = '<div class="pdf">PDF</div>';
+      if (f.type.startsWith('image/')) {
+        const u = URL.createObjectURL(f);
+        thumbs.push(u);
+        pic = `<img src="${u}" alt="">`;
+      }
+      return `<div class="file">${pic}<div class="nm" title="${esc(f.name)}">${esc(f.name)}</div>
+        <div class="sz">${(f.size / 1048576).toFixed(2)} MB</div>
+        <button type="button" class="x" data-i="${i}" title="Remove">×</button></div>`;
+    }).join('');
+    box.querySelectorAll('.x').forEach(b => b.onclick = () => {
+      UP[key].splice(+b.dataset.i, 1); drawFiles(key); setErr(key, '');
+    });
+  };
+  const addFiles = (key, list) => {
+    const [, , max, accept] = SLOTS.find(s => s[0] === key);
+    const ok = accept.split(',');
+    for (const f of list) {
+      if (!ok.includes(f.type)) { setErr(key, `${f.name}: ${key === 'signature' ? 'JPG, PNG or WebP only' : 'JPG, PNG, WebP or PDF only'}`); continue; }
+      if (f.size > MAX_MB * 1048576) { setErr(key, `${f.name} is larger than ${MAX_MB} MB`); continue; }
+      if (max === 1) UP[key] = [f];
+      else if (UP[key].length < max) UP[key].push(f);
+      else { setErr(key, `Up to ${max} files — remove one first`); continue; }
+      setErr(key, '');
+    }
+    drawFiles(key);
+  };
+  $$('.drop').forEach(d => {
+    const key = d.dataset.slot, input = d.querySelector('input[type=file]');
+    const pick = d.querySelector('.pick');
+    pick.onclick = () => input.click();
+    pick.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } };
+    input.onchange = () => { addFiles(key, input.files); input.value = ''; };
+    d.ondragover = e => { e.preventDefault(); d.classList.add('over'); };
+    d.ondragleave = () => d.classList.remove('over');
+    d.ondrop = e => { e.preventDefault(); d.classList.remove('over'); addFiles(key, e.dataTransfer.files); };
+    drawFiles(key);
+  });
+
+  $('#rreset').onclick = () => {
+    if (!confirm('Clear the whole form and the selected files?')) return;
+    RV = {}; UP = { pan_card: [], aadhaar_card: [], signature: [] };
+    R.report();
+  };
+
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const v = values();
+    const errs = {};
+    Object.keys(RULES).forEach(k => { const m = RULES[k](v[k] || '', v); if (m) errs[k] = m; });
+    $$('#rf .field').forEach(f => setErr(f.dataset.f, errs[f.dataset.f]));
+    if (Object.keys(errs).length) {
+      form.querySelector('.field.bad input, .field.bad select')?.focus();
+      toast('Please correct the highlighted fields');
+      return;
+    }
+
+    const fd = new FormData();
+    Object.entries(v).forEach(([k, x]) => { if (x !== '') fd.append(k, x); });
+    Object.entries(UP).forEach(([k, files]) => files.forEach(f => fd.append(k, f, f.name)));
+    const n = UP.pan_card.length + UP.aadhaar_card.length;
+
+    busy(true, n ? `Saving the report and reading ${n} document${n > 1 ? 's' : ''} with OCR…`
+      : 'Saving the report…', n ? 'OCR runs on the server and usually takes 5–20 seconds.' : '');
+    try {
+      const r = await fetch('/api/kyc-sessions', { method: 'POST', body: fd, headers: { Accept: 'application/json' } });
+      if (r.status === 401) { window.location.assign('/login'); return; }
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 422 && body.errors) {
+        Object.entries(body.errors).forEach(([k, m]) => setErr(k, m));
+        form.querySelector('.field.bad')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        toast(body.detail || 'Please correct the highlighted fields');
         return;
       }
-      $('#wres').innerHTML = '<div class="ph">Calling NSDL PAN → KRA → CKYC …</div>';
-      try {
-        const res = await api(`/kyc/fetch/${encodeURIComponent(p)}`);
-        if (res.found) {
-          W.b = res;
-          W.ans = {};
-          bundles.set(res.client.client_id, res);
-          $('#wres').innerHTML = kycRes(res);
-        } else {
-          W.b = null;
-          $('#wres').innerHTML = `<div class="banner warn">PAN valid · <b>KRA: Not Found</b> ·
-            CKYC: not found → fresh KYC required via DigiLocker or document upload</div>`;
-        }
-      } catch (e) {
-        $('#wres').innerHTML = `<div class="banner bad">${esc(e.message)}</div>`;
-      }
-    };
-    $('#wfetch').onclick = fetchPan;
-    $('#wpan').onkeydown = e => { if (e.key === 'Enter') fetchPan(); };
-    $$('.chip').forEach(ch => ch.onclick = () => { $('#wpan').value = ch.dataset.p; fetchPan(); });
-  }
+      if (!r.ok) throw new Error(`${r.status} · ${body.detail || r.statusText}`);
 
-  if (i === 7) $$('input[type=radio]').forEach(r =>
-    r.onchange = () => { W.ans[r.name] = r.value; R.new(); });
-
-  if (i === 12 && c) $('#sub').onclick = () => {
-    if (!$('#decl').checked) return toast('Please accept the declaration');
-    toast('Submitted — moved to Compliance Review');
-    setTimeout(() => go('kyc360', c.client_id), 900);
+      RV = {}; UP = { pan_card: [], aadhaar_card: [], signature: [] };
+      SESS.set(body.session.session_id, body);
+      toast(`Report ${body.session.session_id} created`);
+      openSession(body.session.session_id);
+    } catch (err) {
+      toast('Submit failed — ' + err.message);
+    } finally {
+      busy(false);
+    }
   };
+
+  // ---- recent reports
+  try {
+    const res = await api('/kyc-sessions?limit=10');
+    if (view !== 'report') return;        // navigated away while loading
+    $('#rcount').textContent = `${res.total} in total`;
+    $('#rlist').innerHTML = res.items.length ? res.items.map(x => `
+      <tr class="click" data-sid="${esc(x.session_id)}">
+        <td class="mono">${esc(x.session_id)}</td><td><b>${esc(x.full_name)}</b></td>
+        <td><code>${esc(x.pan)}</code></td><td class="mono">${esc(x.aadhaar_masked)}</td>
+        <td style="white-space:nowrap">${docChips(x.documents)}</td><td>${outPill(x.outcome)}</td><td>${esc(x.created_by_name)}</td>
+        <td class="mut">${dt(x.created_at)}</td></tr>`).join('')
+      : '<tr><td colspan="8" class="mut" style="padding:20px;text-align:center">No reports submitted yet.</td></tr>';
+    $$('#rlist tr[data-sid]').forEach(t => t.onclick = () => openSession(t.dataset.sid));
+  } catch (e) {
+    if (view === 'report') $('#rlist').innerHTML = `<tr><td colspan="8"><div class="banner bad">${esc(e.message)}</div></td></tr>`;
+  }
 };
 
-function kycRes(b) {
-  const c = b.client;
-  return `<div class="grid g4">
-    <div class="card kpi"><div class="l cap">PAN</div>
-      <div class="v" style="font-size:17px;font-family:var(--mono)">${esc(c.pan)}</div>
-      <div style="margin-top:6px">${pill(c.pan_aadhaar_linked === false ? 'Aadhaar not seeded' : 'Valid')}</div></div>
-    <div class="card kpi"><div class="l cap">${esc(c.kra_name)}</div>
-      <div style="margin-top:8px">${pill(c.kra_status)}</div>
-      <div class="foot">${esc(REF.kra_status_codes[c.kra_status] || '')}</div></div>
-    <div class="card kpi"><div class="l cap">CKYC (KIN)</div>
-      <div class="v" style="font-size:16px;font-family:var(--mono)">${esc(c.ckyc_number || 'Not found')}</div></div>
-    <div class="card kpi"><div class="l cap">Pre-filled</div>
-      <div class="v" style="font-size:16px">${esc(c.name)}</div>
-      <div class="foot">${esc(c.date_of_birth_or_incorporation)} · ${esc(c.city)}</div></div>
-  </div>
-  <div class="row" style="margin-top:12px;align-items:flex-start">
-    <div class="ph" style="width:96px;min-height:104px">photo</div>
-    <div class="note" style="flex:1">Fields fetched from KRA / CKYC are locked in the next step.
-      Aadhaar ${esc(c.aadhaar_masked)} (masked). ${b.documents.length} documents and
-      ${b.screening.length} screening results are already on file for this client.</div></div>`;
+function busy(on, title, sub) {
+  let o = $('#busy');
+  if (!on) { if (o) o.remove(); return; }
+  if (!o) { o = document.createElement('div'); o.id = 'busy'; o.className = 'overlay'; document.body.append(o); }
+  o.innerHTML = `<div class="box"><div class="spin"></div><div><b>${esc(title)}</b>
+    ${sub ? `<div class="mut" style="margin-top:3px">${esc(sub)}</div>` : ''}</div></div>`;
 }
 
-/* ============================================================== KYC 360 */
-let tab = 'Profile';
+/* ===================================================== REPORT / SESSION */
+let SID = null;
+const SESS = new Map();     // session_id -> detail just returned by a POST
 
-R.kyc360 = async () => {
-  if (!cur) {
-    const first = await api('/applications?limit=1');
-    if (!first.items.length) { $('#main').innerHTML = '<h1>No clients in the database.</h1>'; return; }
-    cur = first.items[0].client_id;
-  }
-  const b = await bundle(cur);
-  const c = b.client;
-  const T = ['Profile', 'Accounts', 'Documents', 'Screening', 'Timeline'];
-  let inner = '';
+function openSession(id) { SID = id; go('session'); }
 
-  if (tab === 'Profile') {
-    const f = b.fatca_crs, r = b.risk_profile;
-    inner = `<div class="grid g4">${[
-      ['Client ID', c.client_id], ['Type', c.client_type], ['PAN', c.pan],
-      ['CKYC (KIN)', c.ckyc_number], ['KRA', c.kra_name + ' · ' + c.kra_status],
-      ['Residency', c.residential_status + ' · ' + c.tax_residency_country],
-      ['DOB / DOI', c.date_of_birth_or_incorporation], ['Mobile', c.mobile],
-      ['Email', c.email], ['Occupation', c.occupation], ['Income band', c.annual_income_band],
-      ['Net worth', inr(c.net_worth_inr)], ['Source of wealth', c.source_of_wealth],
-      ['Risk profile', c.risk_category + (r ? ` (score ${r.score})` : '')],
-      ['AML rating', c.aml_risk_rating + ' · ' + c.due_diligence_level],
-      ['PEP', c.pep_flag ? 'Yes' : 'No'],
-      ['IPV', c.ipv_mode + ' · ' + c.ipv_status],
-      ['eSign', c.esign_mode + ' · ' + c.esign_status],
-      ['Re-KYC due', c.periodic_kyc_review_due], ['Channel', c.channel]
-    ].map(x => F(x[0], x[1], 1)).join('')}</div>
-
-    <div class="grid g2" style="margin-top:16px">
-      <div><b>Address</b><div class="grid g2" style="margin-top:8px">
-        ${F('Line 1', c.address_line1, 1)}${F('Line 2', c.address_line2, 1)}
-        ${F('City', c.city, 1)}${F('State', c.state, 1)}
-        ${F('PIN / ZIP', c.pincode, 1)}${F('Country', c.country, 1)}</div></div>
-      <div><b>FATCA / CRS</b><div class="grid g2" style="margin-top:8px">
-        ${f ? `${F('US person', f.us_person ? 'Yes' : 'No', 1)}${F('Tax residency', f.tax_residencies, 1)}
-             ${F('TIN / PAN', f.tin_or_pan, 1)}${F('Place of birth', f.place_of_birth, 1)}
-             ${F('Classification', f.fatca_entity_classification, 1)}${F('Declaration', f.declaration_status, 1)}`
-        : '<div class="ph">No record</div>'}</div>
-
-        <b style="display:block;margin-top:14px">Linked bank &amp; demat</b>
-        <table style="margin-top:8px"><tbody>
-        ${b.bank_accounts.map(x => `<tr><td>${esc(x.bank_name)} ${x.is_primary ? '<span class="pill p-acc">primary</span>' : ''}</td>
-          <td class="mono">${esc(x.account_number_masked)}</td><td>${pill(x.penny_drop_status)}</td></tr>`).join('')}
-        ${b.demat ? `<tr><td>${esc(b.demat.depository)} · ${esc(b.demat.dp_name)}</td>
-          <td class="mono">${esc(b.demat.client_id_at_dp)}</td><td>${pill(b.demat.status)}</td></tr>` : ''}
-        </tbody></table>
-      </div></div>`;
-  }
-
-  if (tab === 'Accounts') {
-    inner = b.accounts.length ? `<table><thead><tr><th>Account</th><th>Product</th><th>Strategy</th>
-      <th>Holding</th><th>Corpus</th><th>Fees</th><th>Custodian</th><th>Status</th><th>UCC</th>
-      </tr></thead><tbody>
-      ${b.accounts.map(a => `<tr><td class="mono">${esc(a.account_id)}</td><td><b>${esc(a.product_name)}</b></td>
-        <td>${esc(a.strategy)}</td><td>${esc(a.holding_pattern)}</td>
-        <td><b>${inr(a.commitment_or_corpus_inr)}</b></td><td class="mut">${esc(a.fee_structure)}</td>
-        <td class="mut">${esc(a.custodian)}</td><td>${pill(a.account_status)}</td>
-        <td class="mono">${esc(a.ucc_code)}</td></tr>`).join('')}</tbody></table>
-      <div class="note">Total commitment: <b>${inr(b.accounts.reduce((s, a) => s + Number(a.commitment_or_corpus_inr), 0))}</b>
-      across ${b.accounts.length} subscription${b.accounts.length > 1 ? 's' : ''}.</div>`
-      : '<div class="ph">No product subscriptions yet.</div>';
-  }
-
-  if (tab === 'Documents') {
-    inner = `<table><thead><tr><th>ID</th><th>Document</th><th>Source</th><th>OCR</th>
-      <th>Status</th><th>Expiry</th><th>Uploaded</th><th>Remarks</th></tr></thead><tbody>
-      ${b.documents.map(d => `<tr><td class="mono">${esc(d.document_id)}</td><td><b>${esc(d.document_type)}</b></td>
-        <td>${esc(d.source)}</td><td>${d.ocr_confidence != null ? Math.round(d.ocr_confidence * 100) + '%' : '—'}</td>
-        <td>${pill(d.status)}</td><td class="mut">${esc(d.expiry_date)}</td>
-        <td class="mut">${dt(d.uploaded_at)}</td><td class="mut">${esc(d.rejection_reason)}</td></tr>`).join('')}
-      </tbody></table>`;
-  }
-
-  if (tab === 'Screening') {
-    inner = `<table><thead><tr><th>Screening ID</th><th>List</th><th>Result</th><th>Score</th>
-      <th>Matched name</th><th>Disposition</th><th>Screened</th><th>Reviewer</th></tr></thead><tbody>
-      ${b.screening.map(s => `<tr><td class="mono">${esc(s.screening_id)}</td><td>${esc(s.list_name)}</td>
-        <td>${pill(s.result)}</td><td>${s.match_score}</td><td class="mut">${esc(s.matched_name)}</td>
-        <td>${s.disposition ? pill(s.disposition) : '—'}</td><td class="mut">${dt(s.screened_at)}</td>
-        <td>${esc(s.reviewer)}</td></tr>`).join('')}</tbody></table>`;
-  }
-
-  if (tab === 'Timeline') {
-    inner = b.timeline.map(e => `<div class="row" style="padding:10px 0;border-bottom:1px solid var(--line)">
-      <span class="mut mono" style="width:132px;flex-shrink:0">${dt(e.timestamp)}</span>
-      ${pill(e.stage)}<span>${esc(e.action)} · <b>${esc(e.actor)}</b></span>
-      <span class="mut" style="margin-left:auto">${esc(e.remarks)}</span></div>`).join('')
-      + (b.api_call_log.length ? `<div style="margin-top:18px"><b>Recent downstream calls</b>
-        <table style="margin-top:8px"><thead><tr><th>Request</th><th>Endpoint</th><th>Downstream</th>
-        <th>Status</th><th>Latency</th><th>When</th></tr></thead><tbody>
-        ${b.api_call_log.map(a => `<tr><td class="mono">${esc(a.request_id)}</td>
-          <td class="mono">${esc(a.endpoint)}</td><td>${esc(a.downstream)}</td>
-          <td>${statusPill(a.http_status)}</td><td>${a.latency_ms} ms</td>
-          <td class="mut">${dt(a.timestamp)}</td></tr>`).join('')}</tbody></table></div>` : '');
-  }
-
-  $('#main').innerHTML = `
-  <div class="row" style="align-items:flex-start">
-    <div><h1>${esc(c.name)}</h1>
-      <div class="sub">${esc(c.application_id)} · ${esc(c.client_type)} · RM ${esc(c.rm_name)} (${esc(c.branch)})</div></div>
-    <div style="margin-left:auto" class="row">${pill(c.onboarding_stage)}
-      <button class="btn" onclick="go('queue')">← Queue</button>
-      ${c.onboarding_stage === 'Compliance Review'
-      ? `<button class="btn pri" onclick="toast('Approved → eSign Pending')">Approve</button>
-           <button class="btn" onclick="toast('Sent back to RM')">Send back</button>` : ''}</div></div>
-  <div class="card"><div class="tabs">
-    ${T.map(t => `<a class="${t === tab ? 'on' : ''}" data-t="${t}">${t}</a>`).join('')}</div>${inner}</div>
-  ${trace([['GET', '/v1/clients/{client_id}/kyc-summary'],
-  ['GET', '/v1/onboarding/applications/{application_id}/timeline']])}
-  ${srcLine('clients', 'accounts', 'kyc_documents', 'aml_screening', 'workflow_events')}`;
-
-  $$('.tabs a').forEach(a => a.onclick = () => { tab = a.dataset.t; R.kyc360(); });
+const opill = s => {
+  const cls = { Success: 'p-ok', Partial: 'p-warn', 'No Text': 'p-bad', Failed: 'p-bad', 'Wrong Document': 'p-bad' }[s] || '';
+  return `<span class="pill ${cls}">${esc(s)}</span>`;
 };
-
-/* ================================================================ ALERTS */
-R.alerts = async () => {
-  const res = await api('/screening/alerts');
-  // The sidebar badge always counts *open* hits, matching the dashboard KPI.
-  badges.alerts = res.items.filter(s => s.disposition !== 'False Positive - Cleared').length;
-  nav();
-  $('#main').innerHTML = `
-  <h1>Screening Alerts</h1>
-  <div class="sub">${res.total} potential matches across sanctions, PEP and adverse-media lists ·
-    <b>${badges.alerts} still open</b></div>
-  <div class="card scroll"><table><thead><tr><th>Screening ID</th><th>Client</th><th>AML</th>
-    <th>List</th><th>Score</th><th>Matched name</th><th>Disposition</th><th>Reviewer</th><th></th>
-    </tr></thead><tbody>
-    ${res.items.map(s => `<tr><td class="mono">${esc(s.screening_id)}</td>
-      <td><a href="#" onclick="go('kyc360','${esc(s.client_id)}');return false"
-        style="color:var(--volt);font-weight:600;text-decoration:none">${esc(s.client_name)}</a></td>
-      <td>${pill(s.aml_risk_rating)}</td><td>${esc(s.list_name)}</td>
-      <td><b>${s.match_score}</b></td><td class="mut">${esc(s.matched_name)}</td>
-      <td>${pill(s.disposition)}</td><td>${esc(s.reviewer)}</td>
-      <td><button class="btn sm" onclick="toast('Marked false positive')">Clear</button>
-        <button class="btn sm" onclick="toast('Escalated to Principal Officer')">Escalate</button></td>
-      </tr>`).join('')}</tbody></table></div>
-  ${trace([['POST', '/v1/screening/{screening_id}/disposition']])}
-  ${srcLine('v_screening_hits')}`;
+const vpill = s => {
+  if (s === 'n/a') return '';
+  const cls = { Match: 'p-ok', Partial: 'p-warn', 'Not read': 'p-warn', Mismatch: 'p-bad', 'OCR failed': 'p-bad', 'Wrong document': 'p-bad' }[s] || '';
+  return `<span class="pill ${cls}">${esc(s)}</span>`;
 };
+const pct = c => c == null ? '' : ` · ${Math.round(c * 100)}%`;
+// Read-only display field.
+const RO = (label, value) => `<div class="field"><label>${esc(label)}</label>
+  <div class="ro ${value != null && value !== '' ? 'filled' : ''}">${esc(value)}</div></div>`;
 
-/* ================================================================= REKYC */
-R.rekyc = async () => {
-  const res = await api('/reviews/due');
+R.session = async () => {
+  if (!SID) return go('report');
+  const d = SESS.get(SID) || await api(`/kyc-sessions/${encodeURIComponent(SID)}`);
+  SESS.delete(SID);
+  const s = d.session, f = d.form, P = d.ocr.PAN, A = d.ocr.AADHAAR;
+  const addr = [f.address_line1, f.address_line2, f.city, f.state, f.pincode].filter(Boolean).join(', ');
+
+  const shown = {
+    'Name': [f.full_name, P && P.extracted_name, A && A.extracted_name],
+    'Date of birth': [f.date_of_birth, P && P.extracted_dob,
+      A && (A.extracted_dob || (A.extracted_yob ? 'Year ' + A.extracted_yob : null))],
+    'PAN number': [f.pan, P && P.extracted_pan, null],
+    'Aadhaar number': [f.aadhaar_masked, null, A && A.extracted_aadhaar_masked],
+    'Address': [addr, P && P.extracted_address, A && A.extracted_address]
+  };
+  const flagged = d.comparison.flatMap(c => [c.pan, c.aadhaar])
+    .filter(v => ['Partial', 'Mismatch', 'Not read', 'OCR failed', 'Wrong document'].includes(v)).length;
+  const compared = d.comparison.flatMap(c => [c.pan, c.aadhaar])
+    .filter(v => ['Match', 'Partial', 'Mismatch', 'Not read', 'OCR failed', 'Wrong document'].includes(v)).length;
+
+  const cell = (val, verdict) => verdict === 'n/a' ? '<td class="mut">—</td>'
+    : `<td style="white-space:normal">${val ? esc(val) : '<span class="mut">—</span>'}
+       <div style="margin-top:4px">${vpill(verdict)}</div></td>`;
+
+  const docsOf = t => d.documents.filter(x => x.doc_type === t);
+  const docUrl = x => `/api/kyc-sessions/${encodeURIComponent(s.session_id)}/documents/${x.document_id}`;
+  const docTile = x => `<a class="file big" href="${docUrl(x)}" target="_blank" rel="noopener" title="Open ${esc(x.file_name)}">
+      ${x.mime_type.startsWith('image/') ? `<img src="${docUrl(x)}" alt="${esc(x.doc_type)}" loading="lazy">` : '<div class="pdf">PDF</div>'}
+      <div class="nm">${esc(x.doc_type === 'AADHAAR' ? (x.seq === 1 ? 'Aadhaar · front' : 'Aadhaar · back')
+        : x.doc_type === 'PAN' ? 'PAN card' : 'Signature')}</div>
+      <div class="sz">${esc(x.file_name)} · ${(x.size_bytes / 1048576).toFixed(2)} MB</div></a>`;
+
+  const ocrCard = (label, r, docs) => {
+    if (!docs.length) return `<div class="card"><b>${label} · OCR</b>
+      <div class="ph" style="margin-top:10px;min-height:70px">No ${label} uploaded</div></div>`;
+    if (!r) return `<div class="card"><b>${label} · OCR</b>
+      <div class="ph" style="margin-top:10px;min-height:70px">OCR has not run yet</div></div>`;
+    const c = r.field_confidence || {};
+    const rowsF = label === 'PAN card'
+      ? [['PAN number', r.extracted_pan, c.pan], ['Name', r.extracted_name, c.name],
+         ['Date of birth', r.extracted_dob, c.date_of_birth], ['Address', r.extracted_address || 'Not printed on card', c.address]]
+      : [['Aadhaar number', r.extracted_aadhaar_masked, c.aadhaar_number], ['Name', r.extracted_name, c.name],
+         ['Date of birth', r.extracted_dob || (r.extracted_yob ? 'Year ' + r.extracted_yob : null), c.date_of_birth],
+         ['Address', r.extracted_address, c.address]];
+    return `<div class="card">
+      <div class="row"><b>${label} · OCR</b>${opill(r.status)}
+        <span class="mut" style="margin-left:auto">attempt ${r.attempt} · ${dt(r.processed_at)}</span></div>
+      ${r.error ? `<div class="banner bad" style="margin-top:10px">${esc(r.error)}</div>` : ''}
+      <div class="grid g2" style="margin-top:10px">
+        ${rowsF.map(([l, v, k]) => `<div class="field"${l === 'Address' ? ' style="grid-column:span 2"' : ''}>
+          <label>${esc(l)}<span class="conf">${pct(k)}</span></label>
+          <div class="ro ${v ? 'filled' : ''}">${esc(v || 'Not found')}</div></div>`).join('')}
+      </div>
+      <div class="note">${esc(r.engine)} · ${r.pages} page${r.pages === 1 ? '' : 's'} ·
+        mean confidence ${r.mean_confidence != null ? Math.round(r.mean_confidence * 100) + '%' : '—'} ·
+        ${(r.duration_ms / 1000).toFixed(1)} s</div>
+      ${r.raw_text ? `<details class="trace"><summary>Raw OCR text (Aadhaar numbers masked)</summary>
+        <pre style="margin-top:8px;white-space:pre-wrap">${esc(r.raw_text)}</pre></details>` : ''}
+    </div>`;
+  };
+
+  const EV = {
+    session_created: 'Report submitted', ocr_completed: 'OCR completed',
+    ocr_failed: 'OCR failed', ocr_rerun_requested: 'OCR re-run requested'
+  };
+
   $('#main').innerHTML = `
-  <h1>Re-KYC &amp; Expiring Documents</h1>
-  <div class="sub">Risk-based review cycle — High 2 years · Medium 8 years · Low 10 years</div>
-  <div class="grid g2">
-    <div class="card scroll"><b>Periodic review queue</b>
-      <table style="margin-top:8px"><thead><tr><th>Client</th><th>AML</th><th>DD level</th>
-        <th>RM</th><th>Due</th></tr></thead><tbody>
-      ${res.review_queue.map(c => `<tr class="click" onclick="go('kyc360','${esc(c.client_id)}')">
-        <td><b>${esc(c.name)}</b></td><td>${pill(c.aml_risk_rating)}</td>
-        <td>${esc(c.due_diligence_level)}</td><td class="mut">${esc(c.rm_name)}</td>
-        <td class="mono">${esc(c.periodic_kyc_review_due)}</td></tr>`).join('')}
-      </tbody></table></div>
+  ${head('shield', `<span class="mono">${esc(s.session_id)}</span> ${outPill(s.outcome)}`,
+    `${esc(f.full_name)} · submitted by ${esc(s.created_by_name)} · ${dt(s.created_at)}`,
+    `<button class="btn" onclick="go('queue')">${svg('back')} Queue</button>
+     <button class="btn pri" id="rerun" ${docsOf('PAN').length + docsOf('AADHAAR').length ? '' : 'disabled'}>${svg('refresh')} Re-run OCR</button>`)}
 
-    <div class="card scroll"><b>Documents expiring before ${esc(res.expiring_before)}</b>
-      <table style="margin-top:8px"><thead><tr><th>Client</th><th>Document</th><th>Status</th>
-        <th>Expiry</th></tr></thead><tbody>
-      ${res.expiring_documents.length ? res.expiring_documents.map(d => `
-        <tr class="click" onclick="go('kyc360','${esc(d.client_id)}')">
-          <td><b>${esc(d.client_name)}</b></td><td>${esc(d.document_type)}</td>
-          <td>${pill(d.status)}</td><td class="mono">${esc(d.expiry_date)}</td></tr>`).join('')
-      : '<tr><td colspan="4" class="mut" style="padding:20px;text-align:center">None</td></tr>'}
-      </tbody></table></div>
+  ${compared === 0 ? '<div class="banner warn">No PAN or Aadhaar document was uploaded, so nothing could be verified by OCR.</div>'
+      : flagged === 0 ? '<div class="banner ok">Every field read by OCR matches what was entered on the form.</div>'
+        : `<div class="banner warn"><b>${flagged}</b> of ${compared} OCR checks need review — see the highlighted rows below.</div>`}
+
+  <div class="card" style="margin-top:14px"><b>Form vs. OCR</b>
+    <div class="scroll" style="margin-top:8px"><table class="cmp"><thead><tr>
+      <th style="width:130px">Field</th><th>Entered on form</th><th>PAN card (OCR)</th><th>Aadhaar card (OCR)</th></tr></thead><tbody>
+      ${d.comparison.map(c => {
+        const [fv, pv, av] = shown[c.field];
+        return `<tr><td><b>${esc(c.field)}</b></td><td style="white-space:normal">${esc(fv)}</td>
+          ${cell(pv, c.pan)}${cell(av, c.aadhaar)}</tr>`;
+      }).join('')}
+    </tbody></table></div>
+    <div class="note">Computed when the report is opened — the form values and the OCR values are stored in separate
+      tables and neither is ever overwritten by the other.</div>
   </div>
-  ${trace([['GET', '/v1/kyc/reviews/due']])}
-  ${srcLine('clients', 'kyc_documents')}`;
+
+  <div class="grid g2" style="margin-top:14px">${ocrCard('PAN card', P, docsOf('PAN'))}${ocrCard('Aadhaar card', A, docsOf('AADHAAR'))}</div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card"><b>Entered on the form</b>
+      <div class="grid g2" style="margin-top:10px">
+        ${RO('Customer name', f.full_name)}${RO('Date of birth', f.date_of_birth)}
+        ${RO('PAN', f.pan)}${RO('Aadhaar', f.aadhaar_masked)}
+        ${RO('Mobile', f.mobile)}${RO('Email', f.email)}
+        ${RO('Customer ID', f.customer_id)}${RO('Request type', f.request_type)}
+        ${RO('Existing user ID', f.existing_user_id)}${RO('Preferred user ID', f.preferred_user_id)}
+        ${RO('Limit per day', f.limit_per_day != null ? inr(f.limit_per_day) : null)}
+        ${RO('Limit per transaction', f.limit_per_transaction != null ? inr(f.limit_per_transaction) : null)}
+        ${RO('Approvers required', f.approvers_required)}${RO('Transaction type', f.transaction_type)}
+      </div>
+      <div class="field" style="margin-top:14px"><label>Address</label><div class="ro filled">${esc(addr)}</div></div>
+    </div>
+    <div class="card"><b>Documents</b>
+      ${d.documents.length ? `<div class="files" style="margin-top:10px">${d.documents.map(docTile).join('')}</div>`
+        : '<div class="ph" style="margin-top:10px">No documents uploaded</div>'}
+      <b style="display:block;margin-top:18px">Activity</b>
+      ${d.events.map(e => `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <span class="mut mono" style="width:120px;flex-shrink:0">${dt(e.at)}</span>
+        <span>${esc(EV[e.event] || e.event)}${e.detail && e.detail.doc_type ? ' · ' + esc(e.detail.doc_type) : ''}
+          ${e.detail && e.detail.status ? ' · ' + esc(e.detail.status) : ''} · <b>${esc(e.actor)}</b></span></div>`).join('')}
+    </div>
+  </div>
+  ${srcLine('kyc_intake.kyc_session', 'kyc_form_data', 'kyc_document', 'kyc_ocr_result', 'kyc_session_event')}`;
+
+  $('#rerun').onclick = async () => {
+    busy(true, 'Running OCR again…', 'A new attempt is recorded; earlier attempts are kept.');
+    try {
+      SESS.set(s.session_id, await api(`/kyc-sessions/${encodeURIComponent(s.session_id)}/ocr`, { method: 'POST' }));
+      toast('OCR re-run complete');
+      go('session');
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      busy(false);
+    }
+  };
 };
 
 /* ================================================================== BOOT */
 const THEME_KEY = 'covasant-kyc-theme';
+const SIDE_KEY = 'covasant-kyc-side-collapsed';
 
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
@@ -801,18 +874,21 @@ Last signed in ${dt(u.last_login_at)}`;
   $('#themeBtn').onclick = () =>
     applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 
+  const setSide = c => {
+    document.body.classList.toggle('side-collapsed', c);
+    $('#collapseBtn').title = c ? 'Expand menu' : 'Collapse menu';
+    try { localStorage.setItem(SIDE_KEY, c ? '1' : '0'); } catch (_) { /* private mode */ }
+  };
+  try { setSide(localStorage.getItem(SIDE_KEY) === '1'); } catch (_) { /* private mode */ }
+  $('#collapseBtn').onclick = () => setSide(!document.body.classList.contains('side-collapsed'));
+
   $('#gs').addEventListener('keydown', e => {
     if (e.key === 'Enter') { qf.q = e.target.value; go('queue'); }
   });
 
   $('#main').innerHTML = loading();
   try {
-    const [session, ref, eps] = await Promise.all([
-      api('/auth/me'), api('/reference'), api('/endpoints')
-    ]);
-    ME = session.user;
-    REF = ref;
-    EPS = eps;
+    ME = (await api('/auth/me')).user;
     renderUser(ME);
   } catch (e) {
     $('#main').innerHTML = failure(e);
@@ -820,17 +896,11 @@ Last signed in ${dt(u.last_login_at)}`;
     return;
   }
 
-  // Sidebar badges — one cheap query each, then cached for the session.
+  // Sidebar badge: reports needing attention. The dashboard and queue
+  // refresh it whenever they load.
   try {
-    const [queue, alerts, rekyc] = await Promise.all([
-      api('/applications?limit=1'),
-      api('/screening/alerts?open_only=true'),
-      api('/reviews/due?limit=1')
-    ]);
-    badges.queue = queue.total;
-    badges.alerts = alerts.total;
-    badges.rekyc = rekyc.expiring_documents.length;
-  } catch (_) { /* badges are decorative */ }
+    badges.queue = (await api('/kyc-sessions?limit=1')).attention || null;
+  } catch (_) { /* the badge is decorative */ }
 
   go('dash');
 })();

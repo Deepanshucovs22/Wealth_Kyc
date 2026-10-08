@@ -94,6 +94,8 @@ All settings live in `.env` (not committed):
 | `APP_PORT` | `8010` | chosen so it does not collide with the PRMS app on 8000 |
 | `COOKIE_SECURE` | `false` | set to `true` when serving over HTTPS |
 | `SEED_PASSWORD` | `Covasant@2026` | initial password for every seeded account |
+| `AADHAAR_HMAC_KEY` | *(dev key)* | secret for hashing Aadhaar numbers — set a long random value and keep it stable |
+| `MAX_UPLOAD_MB` | `10` | per-file limit for New Account uploads |
 
 ---
 
@@ -104,10 +106,12 @@ covasant-wealth-kyc/
 ├─ backend/                             Python · FastAPI · PostgreSQL
 │   ├─ app.py                           REST API + static hosting (all endpoints)
 │   ├─ auth.py                          scrypt hashing, session tokens
+│   ├─ ocr.py                           PAN / Aadhaar OCR (RapidOCR) + field parsers
 │   ├─ config.py                        reads ../.env
 │   ├─ requirements.txt
 │   ├─ db/
-│   │   └─ schema.sql                   24 tables, 4 views, FKs + indexes
+│   │   ├─ schema.sql                   24 tables, 4 views, FKs + indexes
+│   │   └─ kyc_intake.sql               New Account tables (applied at app start)
 │   ├─ etl/
 │   │   └─ load_excel_to_pg.py          Excel ➜ PostgreSQL loader
 │   └─ data/
@@ -177,6 +181,12 @@ foreign keys, and every child row cascades from `clients`.
 | `GET /api/endpoints` | the 35-endpoint catalogue |
 | `GET /api/integration/health` | latency and status mix per downstream |
 | `GET /api/health` | liveness + database reachability |
+| `POST /api/kyc-sessions` | **New Account** — multipart form + `pan_card`, `aadhaar_card` (≤ 2), `signature`; creates the session and runs OCR |
+| `GET /api/kyc-sessions` | onboarding queue: reports with outcome and flagged fields (`?q=`, `?outcome=` or `attention`) |
+| `GET /api/kyc-sessions/dashboard` | dashboard figures, from submitted reports only |
+| `GET /api/kyc-sessions/{id}` | form, documents, latest OCR per card, form-vs-OCR comparison, activity |
+| `POST /api/kyc-sessions/{id}/ocr` | run OCR again — adds an attempt, keeps the old ones |
+| `GET /api/kyc-sessions/{id}/documents/{doc}` | the uploaded file (`?download=true` to save) |
 | `POST /api/auth/login` | sign in, opens a session and sets the cookie |
 | `POST /api/auth/logout` | sign out, deletes the session server-side |
 | `GET /api/auth/me` | the currently signed-in user |
@@ -184,17 +194,70 @@ foreign keys, and every child row cascades from `clients`.
 ### Screens
 
 0. **Sign in** — `/login`, with the Covasant brand panel and the form on the right
-1. **Dashboard** — KPIs, pipeline by stage, RM conversion, turnaround by cohort
-2. **Onboarding Queue** — 240 applications, server-side filtering and search
-3. **New Account** — the 13-step wizard; enter or pick a PAN in step 2 and every
-   later step pre-fills from that client's real database record
-4. **Client KYC 360** — Profile / Accounts / Documents / Screening / Timeline
-5. **Screening Alerts** — 41 potential matches, 21 still open
-6. **Re-KYC Due** — periodic review queue and documents expiring before 2028
-7. **API Explorer** — all 35 endpoints with samples, plus downstream health
+1. **Dashboard** — built only from reports submitted through New Account: reports submitted, verified,
+   needs attention, missing documents; verification outcome; which checks fail most;
+   reports per day; who submitted what; OCR reading quality
+2. **Onboarding Queue** — every submitted report with its verification outcome
+   (Verified, Needs Review, Mismatch, Wrong Document, OCR Failed, Incomplete),
+   the fields at issue, filter chips and search; the sidebar badge counts reports
+   needing attention
+3. **New Account** — KYC intake form modelled on the bank's internet-banking
+   request form (customer, identity, address, request type, transaction limits)
+   with PAN, Aadhaar and signature uploads. Submitting creates a session id such
+   as `KYC-20261006-7F3A9C`, runs OCR and opens the report, which compares
+   what was typed with what was read off each card
+
+The menu has only these three screens and stays fixed while the page scrolls.
+The sample-data endpoints (`/api/applications`, `/api/clients/…`, `/api/screening/…`,
+`/api/reviews/…`) are still served by the API but no longer appear in the UI.
 
 The signed-in user appears top right — name, role, branch and last sign-in,
 with **Sign out** in the dropdown.
+
+## New Account — KYC intake and OCR
+
+### Tables (schema `kyc_intake`)
+
+| Table | Holds |
+|---|---|
+| `kyc_session` | one row per report: session id, status, who submitted it, when |
+| `kyc_form_data` | **what the user typed** — 1 : 1 with the session |
+| `kyc_document` | the uploaded files (bytes, type, size, SHA-256) — PAN, Aadhaar front / back, signature |
+| `kyc_ocr_result` | **what OCR read** — one row per card per attempt: extracted fields, per-field confidence, raw text, engine, timing, errors |
+| `kyc_session_event` | audit trail: submitted, OCR completed / failed, re-run |
+| `v_latest_ocr` | view: the newest attempt per session and card |
+
+Typed and read values never share a table, and neither is overwritten by the
+other. The comparison on the report page is computed when it is opened.
+
+The schema is separate from `kyc` on purpose: the Excel loader drops and
+rebuilds `kyc`, and that must never delete submitted reports. The app creates
+`kyc_intake` itself at start-up, so an existing database needs no reload.
+
+### Aadhaar handling
+
+The full 12-digit number is never stored. The form keeps `XXXX XXXX 1234` plus an
+HMAC-SHA256 under `AADHAAR_HMAC_KEY`. That is enough to tell whether the number on the
+card matches the number on the form. OCR text is masked the same way before it
+is saved. The checksum (Verhoeff) is checked in the browser and on the server.
+The uploaded card images themselves still show the number. Mask them, or keep
+them in an Aadhaar Data Vault, before using this with real customers.
+
+### OCR
+
+`backend/ocr.py` uses [RapidOCR](https://github.com/RapidAI/RapidOCR), which runs
+the PaddleOCR PP-OCRv4 models on onnxruntime. The models ship inside the pip
+wheel, so it works offline and needs no Tesseract install. PDFs are rasterised
+with PyMuPDF.
+
+- **PAN:** number (format, holder-type letter and common O/0, I/1 and S/5 fixes), name
+  (labelled and older unlabelled layouts), date of birth, and address if one
+  is printed
+- **Aadhaar:** number (must pass the checksum), name (the English line above
+  the date of birth), date of birth or year of birth, and the address block up to
+  the PIN code; front and back can be uploaded as two files or one PDF
+- Expect about 5–10 s per card on a laptop CPU. A password-protected e-Aadhaar PDF
+  is rejected with a message asking for an unlocked copy.
 
 ## Theme
 

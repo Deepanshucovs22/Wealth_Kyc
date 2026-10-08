@@ -8,29 +8,36 @@ Run:  python backend/app.py         (or: uvicorn backend.app:app --reload)
 """
 from __future__ import annotations
 
+import difflib
+import hashlib
+import hmac
+import re
+import secrets
+import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
 import psycopg2
 from psycopg2 import pool
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
 
 try:  # works both as `python backend/app.py` and `uvicorn backend.app:app`
-    from backend import auth
-    from backend.config import (APP_HOST, APP_PORT, COOKIE_SECURE, app_dsn,
-                                describe_target)
+    from backend import auth, ocr
+    from backend.config import (AADHAAR_HMAC_KEY, APP_HOST, APP_PORT, COOKIE_SECURE,
+                                MAX_UPLOAD_MB, app_dsn, describe_target)
 except ModuleNotFoundError:  # pragma: no cover
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from backend import auth
-    from backend.config import (APP_HOST, APP_PORT, COOKIE_SECURE, app_dsn,
-                                describe_target)
+    from backend import auth, ocr
+    from backend.config import (AADHAAR_HMAC_KEY, APP_HOST, APP_PORT, COOKIE_SECURE,
+                                MAX_UPLOAD_MB, app_dsn, describe_target)
 
 ROOT = Path(__file__).resolve().parent.parent   # project root
 WEB = ROOT / "frontend"                        # static front end
@@ -74,6 +81,29 @@ def db(readonly: bool = True) -> Iterator[RealDictCursor]:
         _pool.putconn(conn)
 
 
+@contextmanager
+def db_tx() -> Iterator[RealDictCursor]:
+    """One read-write transaction: commits if the block succeeds, rolls back
+    if it raises. Used where several rows must land together or not at all."""
+    assert _pool is not None, "connection pool not initialised"
+    conn = _pool.getconn()
+    try:
+        conn.set_session(readonly=False, autocommit=False)
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SET search_path TO kyc, public")
+            yield cur
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        try:
+            conn.set_session(readonly=True, autocommit=True)
+        except psycopg2.Error:
+            pass
+        _pool.putconn(conn)
+
+
 def rows(cur) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
@@ -105,6 +135,18 @@ def startup() -> None:
         n = cur.fetchone()["n"]
         cur.execute("SELECT count(*) AS n FROM app_user WHERE is_active")
         users = cur.fetchone()["n"]
+
+    # New Account (KYC intake) tables live in their own schema; create them if missing.
+    try:
+        with db(readonly=False) as cur:
+            cur.execute(INTAKE_SQL.read_text(encoding="utf-8"))
+    except psycopg2.Error as exc:
+        raise RuntimeError(f"could not apply {INTAKE_SQL.name}: {exc}") from exc
+    if not AADHAAR_HMAC_KEY:
+        print("  WARNING: AADHAAR_HMAC_KEY is not set in .env — using a development "
+              "key. Set a long random value before storing real data.")
+    # Load the OCR models in the background so the first report is not slow.
+    threading.Thread(target=ocr.warm_up, name="ocr-warm-up", daemon=True).start()
 
     # Housekeeping: drop sessions that have already expired.
     try:
@@ -578,6 +620,598 @@ def health() -> dict:
         return {"status": "ok", "database": describe_target(), "clients": n}
     except psycopg2.Error as exc:
         raise HTTPException(503, f"database unavailable: {exc}") from exc
+
+
+# ==========================================================================
+#  New Account — KYC intake sessions (schema kyc_intake, see db/kyc_intake.sql)
+#
+#  POST creates a session, stores the form and the files in one transaction,
+#  then runs OCR on the PAN and Aadhaar uploads. What the user typed and what
+#  OCR read are stored apart and only compared when a session is read back.
+# ==========================================================================
+INTAKE_SQL = ROOT / "backend" / "db" / "kyc_intake.sql"
+MAX_UPLOAD = MAX_UPLOAD_MB * 1024 * 1024
+_HMAC_KEY = (AADHAAR_HMAC_KEY or "wealthgate-development-key").encode()
+
+# form field -> (document type, max files)
+DOC_SLOTS = {"pan_card": ("PAN", 1), "aadhaar_card": ("AADHAAR", 2), "signature": ("SIGNATURE", 1)}
+REQUEST_TYPES = {"New User", "Modification", "Deletion", "Duplicate Password"}
+TRANSACTION_TYPES = {"A", "B", "C", "TFConnect"}
+
+
+def _aadhaar_hmac(number: str) -> str:
+    return hmac.new(_HMAC_KEY, number.encode(), hashlib.sha256).hexdigest()
+
+
+def _validate_report(form) -> tuple[dict, dict]:
+    """Server-side rules for the New Account form — the browser checks the same
+    things, but only this copy is trusted. Returns (clean values, errors)."""
+    v, err = {}, {}
+
+    def text(key: str, limit: int = 150) -> str | None:
+        raw = form.get(key)
+        val = re.sub(r"\s+", " ", raw).strip() if isinstance(raw, str) else ""
+        if len(val) > limit:
+            err[key] = f"Must be at most {limit} characters"
+        return val or None
+
+    # ---- mandatory
+    name = text("full_name")
+    if not name:
+        err["full_name"] = "Name is required"
+    elif not re.fullmatch(r"[A-Za-z][A-Za-z .'\-]{1,149}", name):
+        err["full_name"] = "Use letters, spaces and . ' - only"
+    v["full_name"] = name
+
+    dob = text("date_of_birth", 10)
+    try:
+        d = date.fromisoformat(dob or "")
+        if d > date.today():
+            err["date_of_birth"] = "Date of birth cannot be in the future"
+        elif d.year < 1900:
+            err["date_of_birth"] = "Enter a valid date of birth"
+        v["date_of_birth"] = d
+    except ValueError:
+        err["date_of_birth"] = "Date of birth is required" if not dob else "Enter a valid date"
+
+    pan = (text("pan", 12) or "").upper().replace(" ", "")
+    if not pan:
+        err["pan"] = "PAN is required"
+    elif not re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", pan):
+        err["pan"] = "PAN must look like ABCDE1234F"
+    v["pan"] = pan
+
+    aadhaar = re.sub(r"[\s\-]", "", text("aadhaar", 14) or "")
+    if not aadhaar:
+        err["aadhaar"] = "Aadhaar number is required"
+    elif not re.fullmatch(r"\d{12}", aadhaar):
+        err["aadhaar"] = "Aadhaar must be 12 digits"
+    elif not ocr.valid_aadhaar(aadhaar):
+        err["aadhaar"] = "Not a valid Aadhaar number — please re-check the digits"
+    v["aadhaar"] = aadhaar
+
+    for key, label in (("address_line1", "Address"), ("city", "City"), ("state", "State")):
+        v[key] = text(key, 200 if key == "address_line1" else 80)
+        if not v[key]:
+            err[key] = f"{label} is required"
+    v["address_line2"] = text("address_line2", 200)
+
+    pin = text("pincode", 6)
+    if not pin:
+        err["pincode"] = "PIN code is required"
+    elif not re.fullmatch(r"[1-9][0-9]{5}", pin):
+        err["pincode"] = "PIN code must be 6 digits"
+    v["pincode"] = pin
+
+    # ---- optional (internet-banking request section of the bank form)
+    v["customer_id"] = text("customer_id", 30)
+    v["existing_user_id"] = text("existing_user_id", 30)
+    v["preferred_user_id"] = text("preferred_user_id", 30)
+
+    v["mobile"] = text("mobile", 10)
+    if v["mobile"] and not re.fullmatch(r"[6-9][0-9]{9}", v["mobile"]):
+        err["mobile"] = "Enter a 10-digit Indian mobile number"
+    v["email"] = text("email", 120)
+    if v["email"] and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v["email"]):
+        err["email"] = "Enter a valid email address"
+
+    v["request_type"] = text("request_type", 30)
+    if v["request_type"] and v["request_type"] not in REQUEST_TYPES:
+        err["request_type"] = "Choose one of the listed request types"
+    v["transaction_type"] = text("transaction_type", 10)
+    if v["transaction_type"] and v["transaction_type"] not in TRANSACTION_TYPES:
+        err["transaction_type"] = "Choose A, B, C or TFConnect"
+
+    for key in ("limit_per_day", "limit_per_transaction"):
+        raw = (text(key, 20) or "").replace(",", "")
+        v[key] = None
+        if raw:
+            try:
+                v[key] = float(raw)
+                if not 0 <= v[key] < 1e13:
+                    raise ValueError
+            except ValueError:
+                err[key] = "Enter an amount in rupees"
+    if (v["limit_per_day"] is not None and v["limit_per_transaction"] is not None
+            and v["limit_per_transaction"] > v["limit_per_day"]):
+        err["limit_per_transaction"] = "Cannot exceed the per-day limit"
+
+    appr = text("approvers_required", 1)
+    v["approvers_required"] = int(appr) if appr and appr in "012" else None
+    if appr and v["approvers_required"] is None:
+        err["approvers_required"] = "Choose 0, 1 or 2"
+    return v, err
+
+
+async def _read_uploads(form) -> tuple[list[dict], dict]:
+    """Read every uploaded file, checking count, size and real content type."""
+    docs, err = [], {}
+    for key, (doc_type, most) in DOC_SLOTS.items():
+        files = [f for f in form.getlist(key) if isinstance(f, UploadFile) and f.filename]
+        if len(files) > most:
+            err[key] = f"Upload at most {most} file{'s' if most > 1 else ''}"
+            continue
+        for seq, f in enumerate(files, 1):
+            data = await f.read(MAX_UPLOAD + 1)
+            mime = ocr.sniff_mime(data)
+            if not data:
+                err[key] = f"{f.filename} is empty"
+            elif len(data) > MAX_UPLOAD:
+                err[key] = f"{f.filename} is larger than {MAX_UPLOAD_MB} MB"
+            elif mime is None or (doc_type == "SIGNATURE" and mime == "application/pdf"):
+                err[key] = (f"{f.filename}: upload a JPG, PNG or WebP image"
+                            + ("" if doc_type == "SIGNATURE" else ", or a PDF"))
+            else:
+                docs.append({"doc_type": doc_type, "seq": seq, "file_name": f.filename[-200:],
+                             "mime_type": mime, "data": data,
+                             "sha256": hashlib.sha256(data).hexdigest()})
+    return docs, err
+
+
+def _event(cur, sid: str, event: str, actor: str, detail: dict | None = None) -> None:
+    cur.execute("""INSERT INTO kyc_intake.kyc_session_event (session_id, event, actor, detail)
+                   VALUES (%s, %s, %s, %s)""",
+                (sid, event, actor, Json(detail) if detail else None))
+
+
+def _insert_session(data: dict, docs: list[dict], user: dict, ip: str | None) -> str:
+    """Session, form and files in one transaction — all of it lands or none."""
+    data = dict(data)
+    number = data.pop("aadhaar")
+    data["aadhaar_masked"] = ocr.mask_aadhaar(number)
+    data["aadhaar_hmac"] = _aadhaar_hmac(number)
+
+    with db_tx() as cur:
+        for _ in range(5):          # 16.7M ids per day; a clash is near-impossible
+            sid = f"KYC-{datetime.now():%Y%m%d}-{secrets.token_hex(3).upper()}"
+            cur.execute("""
+                INSERT INTO kyc_intake.kyc_session
+                    (session_id, created_by_user_id, created_by_username, created_by_name, client_ip)
+                VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING
+            """, (sid, user["user_id"], user["username"], user["full_name"], ip))
+            if cur.rowcount:
+                break
+        else:
+            raise HTTPException(500, "could not allocate a KYC session id")
+
+        cols = list(data)           # keys come from _validate_report, never from the client
+        cur.execute(f"""INSERT INTO kyc_intake.kyc_form_data (session_id, {', '.join(cols)})
+                        VALUES (%s, {', '.join(['%s'] * len(cols))})""", [sid, *data.values()])
+        for d in docs:
+            cur.execute("""
+                INSERT INTO kyc_intake.kyc_document
+                    (session_id, doc_type, seq, file_name, mime_type, size_bytes, sha256, content)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (sid, d["doc_type"], d["seq"], d["file_name"], d["mime_type"],
+                  len(d["data"]), d["sha256"], psycopg2.Binary(d["data"])))
+        _event(cur, sid, "session_created", user["username"],
+               {"documents": [f"{d['doc_type']} #{d['seq']}" for d in docs]})
+    return sid
+
+
+def _run_ocr(sid: str, actor: str) -> None:
+    """OCR the session's PAN and Aadhaar files and store a new attempt for each."""
+    with db() as cur:
+        cur.execute("""SELECT doc_type, mime_type, content FROM kyc_intake.kyc_document
+                       WHERE session_id = %s AND doc_type IN ('PAN', 'AADHAAR')
+                       ORDER BY doc_type, seq""", (sid,))
+        docs = rows(cur)
+
+    with db(readonly=False) as cur:
+        cur.execute("""UPDATE kyc_intake.kyc_session SET status = %s, updated_at = now()
+                       WHERE session_id = %s""",
+                    ("OCR Running" if docs else "No ID Documents", sid))
+    if not docs:
+        return
+
+    results = {}
+    for doc_type in ("PAN", "AADHAAR"):
+        files = [(bytes(d["content"]), d["mime_type"]) for d in docs if d["doc_type"] == doc_type]
+        if files:
+            results[doc_type] = ocr.run(doc_type, files)
+
+    with db_tx() as cur:
+        for doc_type, r in results.items():
+            f = r["fields"]
+            number = f.pop("aadhaar_number", None)       # hashed here, never stored
+            cur.execute("""
+                INSERT INTO kyc_intake.kyc_ocr_result
+                    (session_id, doc_type, attempt, status, engine,
+                     extracted_name, extracted_dob, extracted_yob, extracted_pan,
+                     extracted_aadhaar_masked, extracted_aadhaar_hmac, extracted_address,
+                     field_confidence, raw_text, lines, mean_confidence, pages, error, duration_ms)
+                SELECT %s, %s, coalesce(max(attempt), 0) + 1, %s, %s,
+                       %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                FROM kyc_intake.kyc_ocr_result WHERE session_id = %s AND doc_type = %s
+                RETURNING attempt
+            """, (sid, doc_type, r["status"], r["engine"],
+                  f.get("name"), f.get("date_of_birth"), f.get("year_of_birth"), f.get("pan"),
+                  f.get("aadhaar_masked"), _aadhaar_hmac(number) if number else None,
+                  f.get("address"), Json(r["confidence"]), r["raw_text"],
+                  Json(r["lines"]), r["mean_confidence"], r["pages"],
+                  r["error"], r["duration_ms"], sid, doc_type))
+            attempt = cur.fetchone()["attempt"]
+            _event(cur, sid, "ocr_failed" if r["status"] in ("Failed", "No Text", "Wrong Document")
+                   else "ocr_completed",
+                   actor, {"doc_type": doc_type, "attempt": attempt, "status": r["status"],
+                           "fields": sorted(k for k in f if k != "aadhaar_masked"),
+                           "duration_ms": r["duration_ms"], "error": r["error"]})
+        failed = any(r["status"] in ("Failed", "No Text", "Wrong Document") for r in results.values())
+        cur.execute("""UPDATE kyc_intake.kyc_session
+                       SET status = %s, ocr_completed_at = now(), updated_at = now()
+                       WHERE session_id = %s""", ("OCR Failed" if failed else "OCR Complete", sid))
+
+
+# ---- comparison: form vs. OCR, computed on read, never stored -------------
+def _norm_name(s: str) -> str:
+    return " ".join(sorted(re.sub(r"[^A-Z ]", " ", s.upper()).split()))
+
+
+def _cmp_name(form_val: str, ocr_val: str | None) -> str:
+    if not ocr_val:
+        return "Not read"
+    a, b = _norm_name(form_val), _norm_name(ocr_val)
+    if a == b:
+        return "Match"
+    wa, wb = set(a.split()), set(b.split())
+    if wa <= wb or wb <= wa or difflib.SequenceMatcher(None, a, b).ratio() >= 0.85:
+        return "Partial"
+    return "Mismatch"
+
+
+ADDR_NOISE = {"road", "rd", "street", "st", "no", "flat", "near", "opp", "the", "and",
+              "of", "house", "floor", "india"}
+
+
+def _cmp_address(form: dict, ocr_val: str | None) -> str:
+    if not ocr_val:
+        return "Not read"
+    full = " ".join(filter(None, (form["address_line1"], form["address_line2"],
+                                  form["city"], form["state"], form["pincode"])))
+    words = lambda s: {w for w in re.findall(r"[a-z0-9]+", s.lower())
+                       if len(w) > 1 and w not in ADDR_NOISE}
+    mine, card = words(full), words(ocr_val)
+    share = len(mine & card) / max(1, len(mine))
+    pin_ok = form["pincode"] in re.sub(r"\s", "", ocr_val)
+    if pin_ok and share >= 0.6:
+        return "Match"
+    return "Partial" if share >= 0.35 or pin_ok else "Mismatch"
+
+
+def _compare(form: dict, latest: dict) -> list[dict]:
+    pan, aad = latest.get("PAN"), latest.get("AADHAAR")
+
+    def source(rec, fn):
+        if rec is None:
+            return "No document"
+        if rec["status"] in ("Failed", "No Text"):
+            return "OCR failed"
+        if rec["status"] == "Wrong Document":
+            return "Wrong document"
+        return fn(rec)
+
+    def dob(rec):
+        if rec["extracted_dob"]:
+            return "Match" if rec["extracted_dob"] == form["date_of_birth"] else "Mismatch"
+        if rec.get("extracted_yob"):
+            return "Partial" if rec["extracted_yob"] == form["date_of_birth"].year else "Mismatch"
+        return "Not read"
+
+    def aadhaar(rec):
+        if rec["extracted_aadhaar_hmac"]:
+            return "Match" if hmac.compare_digest(rec["extracted_aadhaar_hmac"],
+                                                  form["aadhaar_hmac"]) else "Mismatch"
+        if rec["extracted_aadhaar_masked"]:      # masked card: only the last four to go on
+            return ("Partial" if rec["extracted_aadhaar_masked"] == form["aadhaar_masked"]
+                    else "Mismatch")
+        return "Not read"
+
+    def pan_no(rec):
+        if not rec["extracted_pan"]:
+            return "Not read"
+        return "Match" if rec["extracted_pan"].strip() == form["pan"].strip() else "Mismatch"
+
+    return [
+        {"field": "Name", "pan": source(pan, lambda r: _cmp_name(form["full_name"], r["extracted_name"])),
+         "aadhaar": source(aad, lambda r: _cmp_name(form["full_name"], r["extracted_name"]))},
+        {"field": "Date of birth", "pan": source(pan, dob), "aadhaar": source(aad, dob)},
+        {"field": "PAN number", "pan": source(pan, pan_no), "aadhaar": "n/a"},
+        {"field": "Aadhaar number", "pan": "n/a", "aadhaar": source(aad, aadhaar)},
+        {"field": "Address",
+         "pan": source(pan, lambda r: _cmp_address(form, r["extracted_address"])
+                       if r["extracted_address"] else "Not on card"),
+         "aadhaar": source(aad, lambda r: _cmp_address(form, r["extracted_address"]))},
+    ]
+
+
+# ---- verification outcome: one word per report, for the queue and dashboard
+ATTENTION = ("Wrong Document", "OCR Failed", "Mismatch", "Needs Review")
+OUTCOMES = ("Verified", "Needs Review", "Mismatch", "Wrong Document", "OCR Failed",
+            "Incomplete", "No Documents", "Pending")
+
+
+def _outcome(status: str, comparison: list[dict], doc_types: set) -> str:
+    """Worst finding wins: an unreadable card or a contradiction outranks a
+    missing document, which outranks a clean result."""
+    if status in ("Submitted", "OCR Running"):
+        return "Pending"
+    has_pan, has_aadhaar = "PAN" in doc_types, "AADHAAR" in doc_types
+    if not (has_pan or has_aadhaar):
+        return "No Documents"
+    verdicts = [v for c in comparison for v in (c["pan"], c["aadhaar"])]
+    if "Wrong document" in verdicts:
+        return "Wrong Document"
+    if "OCR failed" in verdicts:
+        return "OCR Failed"
+    if "Mismatch" in verdicts:
+        return "Mismatch"
+    if "Partial" in verdicts or "Not read" in verdicts:
+        return "Needs Review"
+    if not (has_pan and has_aadhaar):
+        return "Incomplete"
+    return "Verified"
+
+
+def _flags(comparison: list[dict]) -> list[str]:
+    """Fields with any finding short of a clean match."""
+    bad = {"Mismatch", "Partial", "Not read", "OCR failed", "Wrong document"}
+    return [c["field"] for c in comparison if c["pan"] in bad or c["aadhaar"] in bad]
+
+
+def _load_reports(q: str | None = None) -> list[dict]:
+    """Every report with its outcome. The comparison runs in Python (fuzzy
+    name and address matching), so this reads forms and latest OCR in bulk —
+    three queries however many reports there are."""
+    where, params = "", {}
+    if q:
+        where = "WHERE f.full_name ILIKE %(q)s OR f.pan ILIKE %(q)s OR s.session_id ILIKE %(q)s"
+        params["q"] = f"%{q.strip()}%"
+    with db() as cur:
+        cur.execute(f"""
+            SELECT f.*, s.status, s.created_at, s.created_by_username, s.created_by_name
+            FROM kyc_intake.kyc_session s JOIN kyc_intake.kyc_form_data f USING (session_id)
+            {where} ORDER BY s.created_at DESC
+        """, params)
+        forms = rows(cur)
+        if not forms:
+            return []
+        ids = [f["session_id"] for f in forms]
+        cur.execute("""SELECT * FROM kyc_intake.v_latest_ocr WHERE session_id = ANY(%s)""", (ids,))
+        latest: dict[str, dict] = {}
+        for r in rows(cur):
+            latest.setdefault(r["session_id"], {})[r["doc_type"]] = r
+        cur.execute("""SELECT session_id, array_agg(DISTINCT doc_type) AS types
+                       FROM kyc_intake.kyc_document WHERE session_id = ANY(%s)
+                       GROUP BY session_id""", (ids,))
+        types = {r["session_id"]: set(r["types"]) for r in rows(cur)}
+
+    out = []
+    for f in forms:
+        sid = f["session_id"]
+        comparison = _compare(f, latest.get(sid, {}))
+        docs = types.get(sid, set())
+        ocr = latest.get(sid, {})
+        out.append({
+            "session_id": sid, "status": f["status"],
+            "created_at": f["created_at"], "created_by_username": f["created_by_username"],
+            "created_by_name": f["created_by_name"],
+            "full_name": f["full_name"], "pan": f["pan"], "aadhaar_masked": f["aadhaar_masked"],
+            "city": f["city"], "state": f["state"],
+            "documents": sorted(docs),
+            "outcome": _outcome(f["status"], comparison, docs),
+            "flags": _flags(comparison),
+            "comparison": comparison,
+            "ocr": {t: {"status": r["status"], "mean_confidence": r["mean_confidence"],
+                        "duration_ms": r["duration_ms"]} for t, r in ocr.items()},
+        })
+    return out
+
+
+def _session_detail(sid: str) -> dict:
+    with db() as cur:
+        cur.execute("SELECT * FROM kyc_intake.kyc_session WHERE session_id = %s", (sid,))
+        session = one(cur)
+        if session is None:
+            raise HTTPException(404, f"no KYC session {sid}")
+        cur.execute("SELECT * FROM kyc_intake.kyc_form_data WHERE session_id = %s", (sid,))
+        form = one(cur)
+        cur.execute("""SELECT document_id, doc_type, seq, file_name, mime_type, size_bytes,
+                              sha256, uploaded_at
+                       FROM kyc_intake.kyc_document WHERE session_id = %s
+                       ORDER BY array_position(ARRAY['PAN','AADHAAR','SIGNATURE'], doc_type), seq""",
+                    (sid,))
+        documents = rows(cur)
+        cur.execute("SELECT * FROM kyc_intake.v_latest_ocr WHERE session_id = %s", (sid,))
+        latest = {r["doc_type"]: r for r in rows(cur)}
+        cur.execute("""SELECT event, actor, detail, at FROM kyc_intake.kyc_session_event
+                       WHERE session_id = %s ORDER BY at, event_id""", (sid,))
+        events = rows(cur)
+
+    comparison = _compare(form, latest)
+    session["outcome"] = _outcome(session["status"], comparison, {d["doc_type"] for d in documents})
+    session["flags"] = _flags(comparison)
+    # The hashes exist only for comparison; they never leave the server.
+    form.pop("aadhaar_hmac", None)
+    for r in latest.values():
+        r.pop("extracted_aadhaar_hmac", None)
+        r.pop("lines", None)            # boxes are evidence, too heavy for the page
+    return {"session": session, "form": form, "documents": documents,
+            "ocr": latest, "comparison": comparison, "events": events}
+
+
+@app.post("/api/kyc-sessions", summary="New Account — submit the form and documents, then run OCR")
+async def create_kyc_session(request: Request):
+    """multipart/form-data: the form fields plus `pan_card`, `aadhaar_card`
+    (front and back, up to two files) and `signature`."""
+    form = await request.form(max_files=len(DOC_SLOTS) + 2, max_fields=60)
+    data, errors = _validate_report(form)
+    docs, file_errors = await _read_uploads(form)
+    errors.update(file_errors)
+    if errors:
+        return JSONResponse({"detail": "Please correct the highlighted fields.",
+                             "errors": errors}, status_code=422)
+
+    user = request.state.user
+    sid = await run_in_threadpool(_insert_session, data, docs, user, _client_ip(request))
+    await run_in_threadpool(_run_ocr, sid, user["username"])
+    return await run_in_threadpool(_session_detail, sid)
+
+
+@app.get("/api/kyc-sessions", summary="Onboarding queue — submitted reports with their verification outcome")
+def list_kyc_sessions(q: str | None = Query(None, description="matches name, PAN or session id"),
+                      outcome: str | None = Query(None, description="one outcome, or 'attention' for "
+                                                  "Mismatch + Needs Review + OCR Failed"),
+                      limit: int = Query(100, ge=1, le=1000)) -> dict:
+    reports = _load_reports(q)
+    counts = {o: 0 for o in OUTCOMES}
+    for r in reports:
+        counts[r["outcome"]] += 1
+    if outcome == "attention":
+        reports = [r for r in reports if r["outcome"] in ATTENTION]
+    elif outcome:
+        reports = [r for r in reports if r["outcome"] == outcome]
+    for r in reports:
+        r.pop("comparison")
+    return {"total": len(reports), "counts": counts,
+            "attention": sum(counts[o] for o in ATTENTION),
+            "returned": min(len(reports), limit), "items": reports[:limit]}
+
+
+@app.get("/api/kyc-sessions/dashboard", summary="Onboarding dashboard — figures from submitted reports only")
+def kyc_dashboard() -> dict:
+    reports = _load_reports()
+    today = date.today()
+    day = lambda r: r["created_at"].astimezone().date()
+
+    outcomes = {o: 0 for o in OUTCOMES}
+    for r in reports:
+        outcomes[r["outcome"]] += 1
+    processed = sum(n for o, n in outcomes.items() if o not in ("Pending", "No Documents"))
+
+    # Which checks fail most — per field, counted once per report.
+    fields = {}
+    for r in reports:
+        for c in r["comparison"]:
+            f = fields.setdefault(c["field"], {"field": c["field"], "checked": 0,
+                                               "match": 0, "review": 0, "mismatch": 0})
+            got = [v for v in (c["pan"], c["aadhaar"])
+                   if v in ("Match", "Partial", "Not read", "Mismatch", "OCR failed", "Wrong document")]
+            if not got:
+                continue
+            f["checked"] += 1
+            if "Mismatch" in got:
+                f["mismatch"] += 1
+            elif any(v in ("Partial", "Not read", "OCR failed", "Wrong document") for v in got):
+                f["review"] += 1
+            else:
+                f["match"] += 1
+
+    trend = []
+    for i in range(13, -1, -1):
+        d = today - timedelta(days=i)
+        trend.append({"date": d, "reports": sum(1 for r in reports if day(r) == d)})
+
+    people = {}
+    for r in reports:
+        p = people.setdefault(r["created_by_username"], {"name": r["created_by_name"], "reports": 0,
+                                                         "verified": 0, "attention": 0})
+        p["reports"] += 1
+        p["verified"] += r["outcome"] == "Verified"
+        p["attention"] += r["outcome"] in ATTENTION
+
+    with db() as cur:
+        cur.execute("""
+            SELECT doc_type, count(*)::int AS cards,
+                   round(avg(mean_confidence), 3) AS avg_confidence,
+                   round(avg(duration_ms))::int AS avg_ms,
+                   count(*) FILTER (WHERE status IN ('Failed', 'No Text'))::int AS unreadable,
+                   count(*) FILTER (WHERE status = 'Wrong Document')::int AS wrong_document
+            FROM kyc_intake.v_latest_ocr GROUP BY doc_type ORDER BY doc_type
+        """)
+        ocr = rows(cur)
+
+    attention = [{k: r[k] for k in ("session_id", "full_name", "pan", "outcome", "flags",
+                                    "created_at", "created_by_name")}
+                 for r in reports if r["outcome"] in ATTENTION][:8]
+    return {
+        "totals": {
+            "reports": len(reports),
+            "today": sum(1 for r in reports if day(r) == today),
+            "last_7_days": sum(1 for r in reports if (today - day(r)).days < 7),
+            "verified": outcomes["Verified"],
+            "processed": processed,
+            "attention": sum(outcomes[o] for o in ATTENTION),
+            "incomplete": outcomes["Incomplete"] + outcomes["No Documents"],
+        },
+        "outcomes": [{"outcome": o, "reports": n} for o, n in outcomes.items()],
+        "fields": list(fields.values()),
+        "trend": trend,
+        "by_user": sorted(people.values(), key=lambda p: -p["reports"]),
+        "ocr": ocr,
+        "attention": attention,
+    }
+
+
+@app.get("/api/kyc-sessions/{session_id}", summary="One submitted report: form, documents, OCR, comparison")
+def get_kyc_session(session_id: str) -> dict:
+    return _session_detail(session_id)
+
+
+@app.post("/api/kyc-sessions/{session_id}/ocr", summary="Run OCR again (adds a new attempt)")
+def rerun_kyc_ocr(session_id: str, request: Request) -> dict:
+    with db() as cur:
+        cur.execute("""SELECT status, updated_at > now() - interval '5 minutes' AS recent
+                       FROM kyc_intake.kyc_session WHERE session_id = %s""", (session_id,))
+        s = one(cur)
+    if s is None:
+        raise HTTPException(404, f"no KYC session {session_id}")
+    if s["status"] == "OCR Running" and s["recent"]:
+        raise HTTPException(409, "OCR is already running for this session")
+    actor = request.state.user["username"]
+    with db(readonly=False) as cur:
+        _event(cur, session_id, "ocr_rerun_requested", actor)
+    _run_ocr(session_id, actor)
+    return _session_detail(session_id)
+
+
+@app.get("/api/kyc-sessions/{session_id}/documents/{document_id}",
+         summary="The uploaded file itself", response_class=Response)
+def get_kyc_document(session_id: str, document_id: int, download: bool = False) -> Response:
+    with db() as cur:
+        cur.execute("""SELECT file_name, mime_type, content FROM kyc_intake.kyc_document
+                       WHERE session_id = %s AND document_id = %s""", (session_id, document_id))
+        doc = one(cur)
+    if doc is None:
+        raise HTTPException(404, "no such document")
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", doc["file_name"]) or "document"
+    headers = {
+        "Content-Disposition": f'{"attachment" if download else "inline"}; filename="{safe}"',
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+    }
+    if doc["mime_type"].startswith("image/"):
+        headers["Content-Security-Policy"] = "default-src 'none'"
+    return Response(bytes(doc["content"]), media_type=doc["mime_type"], headers=headers)
 
 
 # ==========================================================================
