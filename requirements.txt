@@ -1,0 +1,25 @@
+# Agent Template Dependencies
+# Generated based on selected features
+
+# Core Dependencies
+a2a-sdk[all]>=0.3.0,<1.0.0
+cams-otel-lib>=0.2.0
+fastapi>=0.110.0
+google-auth>=2.0.0
+langchain-anthropic>=0.1.0
+langchain-core>=0.2.0
+langchain-google-genai>=2.0.5
+langchain-mcp-adapters>=0.1.0
+langchain-openai>=0.1.0
+langchain>=0.2.0
+langgraph>=0.2.0
+opentelemetry-instrumentation-fastapi==0.63b1
+opentelemetry-instrumentation-requests==0.63b1
+# Auth — auth-service client + middleware; vendored under docker/vendor/
+# (see docker/Dockerfile), same pattern as cams-otel-lib below.
+platform-authlib==0.2.0
+pydantic-settings>=2.0.0
+pydantic>=2.0.0
+python-dotenv
+requests
+uvicorn[standard]

@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+src/config/agent_config.json
+wake_test_out.log
+.claude/
