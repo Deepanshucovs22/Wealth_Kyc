@@ -6,6 +6,7 @@ This node allows the LLM to decide which tools to call and when.
 from typing import Dict, Any, List
 
 from langchain_core.messages import AIMessage, ToolMessage, SystemMessage
+from langchain_core.runnables import RunnableWithFallbacks
 from src.utils.llm_provider import get_llm_model, get_provider_from_model
 from src.utils.langfuse_decorator import trace_node
 from cams_otel_lib import (
@@ -26,6 +27,17 @@ except ImportError:
         def decorator(func): return func
         return decorator
     _METRICS_AVAILABLE = False
+
+
+def _bind_tools(llm, tools):
+    """Bind tools onto llm, recursing into RunnableWithFallbacks (e.g. a
+    primary LLM with a fallback LLM) since that wrapper has no bind_tools()
+    of its own — only the underlying chat models do."""
+    if isinstance(llm, RunnableWithFallbacks):
+        bound_primary = _bind_tools(llm.runnable, tools)
+        bound_fallbacks = [_bind_tools(fb, tools) for fb in llm.fallbacks]
+        return bound_primary.with_fallbacks(bound_fallbacks)
+    return llm.bind_tools(tools)
 
 
 class AgentNode:
@@ -74,7 +86,7 @@ class AgentNode:
 
         # Bind tools to LLM
         if self.tools:
-            self.llm_with_tools = self.llm.bind_tools(self.tools)
+            self.llm_with_tools = _bind_tools(self.llm, self.tools)
             logger.info(f"Agent node initialized with {len(self.tools)} tools")
         else:
             self.llm_with_tools = self.llm

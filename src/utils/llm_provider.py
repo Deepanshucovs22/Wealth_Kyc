@@ -15,6 +15,8 @@ from pydantic import SecretStr
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import ChatVertexAI
+from google.oauth2 import service_account
 
 from src.config.settings import settings
 from src.config.agent_config import get_secrets, load_agent_config
@@ -23,6 +25,7 @@ from cams_otel_lib import Logger as logger, otel_trace
 # Cache config to avoid reloading on every LLM creation
 _cached_config = None
 _cached_litellm_config = None
+_cached_vertex_credentials = None
 
 @otel_trace
 def _get_litellm_config():
@@ -35,8 +38,28 @@ def _get_litellm_config():
         
         secrets = get_secrets("default", _cached_config)
         _cached_litellm_config = secrets.get("litellm", {})
-    
+
     return _cached_litellm_config
+
+
+@otel_trace
+def _get_vertex_credentials():
+    """Load the GCP service account credentials configured via GCP_SERVICE_ACCOUNT_JSON.
+
+    Returns (credentials, project_id), or (None, None) if unset — callers treat
+    that as "no service account configured, use other auth methods instead."
+    """
+    global _cached_vertex_credentials
+    if _cached_vertex_credentials is None:
+        sa_path = settings.gcp_service_account_json
+        if not sa_path:
+            _cached_vertex_credentials = (None, None)
+        else:
+            credentials = service_account.Credentials.from_service_account_file(
+                sa_path, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            _cached_vertex_credentials = (credentials, credentials.project_id)
+    return _cached_vertex_credentials
 
 
 class LLMProvider(str, Enum):
@@ -209,20 +232,22 @@ def _create_anthropic_llm(
 @otel_trace
 def _create_google_llm(
     model_name: str, temperature: float, streaming: bool, custom_headers: Optional[dict] = None, max_tokens: Optional[int] = None, **kwargs
-) -> ChatGoogleGenerativeAI:
-    """Create Google (Gemini) LLM instance with optional LiteLLM gateway support."""
+):
+    """Create Google (Gemini) LLM instance.
+
+    Priority: Vertex AI via GCP_SERVICE_ACCOUNT_JSON (primary, when configured)
+    -> LiteLLM gateway -> direct Gemini Developer API key. When both Vertex AI
+    and the LiteLLM gateway are configured, Vertex AI is primary and the
+    gateway is wired in as an automatic fallback (via .with_fallbacks()) so a
+    Vertex AI outage/misconfig doesn't take the agent down.
+    """
     litellm_config = _get_litellm_config()
     litellm_enabled = litellm_config.get("enabled", False)
     litellm_base_url = litellm_config.get("base_url", "")
-
-    api_key = settings.google_api_key
     litellm_api_key = litellm_config.get("api_key", "")
-    if not api_key and not (litellm_enabled and litellm_base_url):
-        raise ValueError(
-            "GOOGLE_API_KEY environment variable is not set. "
-            "Please set it in your .env file."
-        )
+    api_key = settings.google_api_key
 
+    litellm_llm = None
     if litellm_enabled and litellm_base_url:
         logger.debug(f"Creating Google LLM via LiteLLM gateway: {model_name}")
         llm_kwargs = {
@@ -237,19 +262,46 @@ def _create_google_llm(
         if custom_headers:
             llm_kwargs["default_headers"] = custom_headers
         llm_kwargs.update(kwargs)
-        return ChatOpenAI(**llm_kwargs)
-    else:
-        logger.debug(f"Creating Google LLM: {model_name}")
-        # Google uses max_output_tokens, not max_tokens
-        extra = {"max_output_tokens": max_tokens} if max_tokens is not None else {}
-        return ChatGoogleGenerativeAI(
-            google_api_key=SecretStr(api_key),
-            model=model_name,
-            temperature=temperature,
-            streaming=streaming,
-            **extra,
-            **kwargs,
+        litellm_llm = ChatOpenAI(**llm_kwargs)
+
+    credentials, project_id = _get_vertex_credentials()
+    if credentials is not None:
+        # Vertex AI takes bare model names ("gemini-1.5-pro"), not the
+        # LiteLLM-style "provider/model" string used elsewhere in config.
+        vertex_model_name = model_name.split("/", 1)[-1] if "/" in model_name else model_name
+        logger.debug(f"Creating Google LLM via Vertex AI (service account): {vertex_model_name}")
+        vertex_kwargs = {
+            "model": vertex_model_name,
+            "temperature": temperature,
+            "streaming": streaming,
+            "credentials": credentials,
+            "project": project_id,
+        }
+        if max_tokens is not None:
+            vertex_kwargs["max_output_tokens"] = max_tokens
+        vertex_kwargs.update(kwargs)
+        vertex_llm = ChatVertexAI(**vertex_kwargs)
+        return vertex_llm.with_fallbacks([litellm_llm]) if litellm_llm is not None else vertex_llm
+
+    if litellm_llm is not None:
+        return litellm_llm
+
+    if not api_key:
+        raise ValueError(
+            "GOOGLE_API_KEY environment variable is not set. "
+            "Please set it in your .env file."
         )
+    logger.debug(f"Creating Google LLM: {model_name}")
+    # Google uses max_output_tokens, not max_tokens
+    extra = {"max_output_tokens": max_tokens} if max_tokens is not None else {}
+    return ChatGoogleGenerativeAI(
+        google_api_key=SecretStr(api_key),
+        model=model_name,
+        temperature=temperature,
+        streaming=streaming,
+        **extra,
+        **kwargs,
+    )
 
 
 @otel_trace

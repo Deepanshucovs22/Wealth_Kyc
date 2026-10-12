@@ -30,6 +30,25 @@ from cams_otel_lib import (
 from langgraph.checkpoint.memory import MemorySaver
 
 
+def _extract_text(content) -> str:
+    """Normalize an AIMessage's .content into plain text.
+
+    Most models return a plain string. Some (e.g. Gemini 2.5 "thinking"
+    models via Vertex AI) return a list of content blocks instead — text
+    blocks plus non-text ones like thought_signature — so pull out just the
+    text parts rather than let a raw block list leak through as the answer.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts)
+    return str(content)
 
 
 class AgentState(TypedDict):
@@ -241,7 +260,7 @@ class AgentExecutor(A2AAgentExecutor):
             for msg in reversed(final_state["messages"]):
                 if isinstance(msg, _AIMessage) and not getattr(msg, "tool_calls", None):
                     final_state = dict(final_state)
-                    final_state["final_response"] = msg.content
+                    final_state["final_response"] = _extract_text(msg.content)
                     break
 
         return final_state
