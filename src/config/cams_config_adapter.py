@@ -8,18 +8,10 @@ from typing import Dict, Any, Optional
 
 from cams_otel_lib import Logger as logger, otel_trace
 
-
-@otel_trace
-def _deep_fill_missing(base: Dict[str, Any], fallback: Dict[str, Any]) -> None:
-    """
-    Fill keys in `base` that are absent, None, or "" from `fallback`, recursively
-    for nested dicts. `base`'s own non-empty values always win — this only fills gaps.
-    """
-    for key, fallback_value in fallback.items():
-        if key not in base or base[key] is None or base[key] == "":
-            base[key] = fallback_value
-        elif isinstance(base[key], dict) and isinstance(fallback_value, dict):
-            _deep_fill_missing(base[key], fallback_value)
+# Single implementation shared with settings.py's config layering, so the
+# gap-filling semantics behind the CAMS > code > local precedence can't drift
+# between the two places that enforce it.
+from src.config.settings import _deep_fill_missing
 
 
 class CAMSConfigAdapter:

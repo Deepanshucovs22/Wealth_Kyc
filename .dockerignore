@@ -12,10 +12,9 @@ venv/
 .env
 .env.local
 
-# Real credential-bearing config — never goes into the build context, so the
-# image only ever bakes the blanked src/config/agent_config.json. Mount this
-# at /app/config/agent_config.json (or pass CONFIG_JSON) to run locally.
-local/
+# Config layer 3 — real credentials, local-dev only. Kept out of the build
+# context so the image only ever bakes the blanked src/config/agent_config.json.
+local.agent_config.json
 
 # Git
 .git/

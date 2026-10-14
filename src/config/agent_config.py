@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from src.config.cams_config_adapter import load_cams_config
-from src.config.settings import settings
+from src.config.settings import settings, _deep_fill_missing
 from cams_otel_lib import Logger as logger, otel_trace
 
 _MULTI_TENANT = settings.multi_tenant_enabled
@@ -63,6 +63,18 @@ def load_agent_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
         external_path = Path(settings.app_config_path)
 
     internal_raw = _read_json_config(internal_path)
+
+    # Layer 3 (lowest): local.agent_config.json — gitignored, local-dev only and
+    # absent in any real deployment. It fills only what the baked-in config
+    # leaves blank, which is how a developer supplies real credentials without
+    # the image ever carrying them (the committed agent_config.json ships with
+    # every credential field blanked).
+    local_path = Path(__file__).resolve().parents[2] / "local.agent_config.json"
+    local_raw = _read_json_config(local_path)
+    if local_raw:
+        logger.info(f"Layering local developer config from: {local_path}")
+        internal_raw = internal_raw or {}
+        _deep_fill_missing(internal_raw, local_raw)
 
     if external_path and external_path != internal_path:
         logger.info(f"Attempting to load CAMS-mounted config from: {external_path}")

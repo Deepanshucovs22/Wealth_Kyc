@@ -10,25 +10,75 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 
 
-def _load_config_secrets_env() -> dict:
-    """Read agent_config.json's agent_config.secrets.env block — the CAMS-mounted
-    config (APP_CONFIG_PATH) takes priority over the baked-in image config."""
-    candidates = []
+def _deep_fill_missing(base: dict, fallback: dict) -> None:
+    """
+    Fill keys in `base` that are absent, None, or "" from `fallback`, recursively
+    for nested dicts. `base`'s own non-empty values always win — this only fills
+    gaps. Canonical implementation for the repo; cams_config_adapter imports it
+    rather than keeping a second copy that could drift.
+    """
+    for key, fallback_value in fallback.items():
+        if key not in base or base[key] is None or base[key] == "":
+            base[key] = fallback_value
+        elif isinstance(base[key], dict) and isinstance(fallback_value, dict):
+            _deep_fill_missing(base[key], fallback_value)
+
+
+def _read_json(path: Path) -> dict:
+    """Read a JSON config file. Returns {} if missing/unreadable — never raises.
+
+    settings.py is imported before logging is configured, so this stays silent
+    rather than importing a logger (which would also risk an import cycle:
+    cams_config_adapter imports from this module).
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def load_effective_config_dict() -> dict:
+    """
+    Layer every config source into one dict. Highest priority first:
+
+      1. agent_config.json (CAMS-mounted)  — located via APP_CONFIG_PATH
+      2. agent_config.json (baked into the image) — src/config/agent_config.json
+      3. local.agent_config.json — gitignored, local-dev only, absent in any
+         real deployment
+
+    Each lower layer only fills keys the higher layers left absent/None/"", so a
+    CAMS config that omits a block (or supplies a PARTIAL one) still falls back
+    to the baked-in defaults instead of shadowing them wholesale. That partial
+    case is the one that bites: a CAMS UI export commonly carries a secrets.env
+    with a couple of keys and no AUTH_SERVICE_URL — picking that block whole
+    would leave the agent with no auth URL and kill it at import time.
+    """
+    paths = []
     app_config_path = os.getenv("APP_CONFIG_PATH")
     if app_config_path:
-        candidates.append(Path(app_config_path))
-    candidates.append(Path(__file__).parent / "agent_config.json")
+        paths.append(Path(app_config_path))
+    paths.append(Path(__file__).parent / "agent_config.json")
+    paths.append(Path(__file__).resolve().parents[2] / "local.agent_config.json")
 
-    for path in candidates:
-        try:
-            with open(path) as f:
-                data = json.load(f)
-            env = data.get("agent_config", {}).get("secrets", {}).get("env")
-            if env:
-                return env
-        except Exception:
-            continue
-    return {}
+    effective: dict = {}
+    for path in paths:
+        layer = _read_json(path)
+        if layer:
+            _deep_fill_missing(effective, layer)
+    return effective
+
+
+def _load_config_secrets_env() -> dict:
+    """The agent_config.secrets.env block, resolved across all config layers."""
+    env = (
+        load_effective_config_dict()
+        .get("agent_config", {})
+        .get("secrets", {})
+        .get("env")
+    )
+    return env or {}
 
 
 def _apply_config_env() -> None:

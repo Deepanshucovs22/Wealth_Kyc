@@ -11,9 +11,13 @@ build/
 .pytest_cache/
 # src/config/agent_config.json IS committed, but with every credential field
 # blanked — it is the fallback layer the image bakes in so a pod always has
-# AUTH_SERVICE_URL/model/instructions and never dies at import. The real
-# values live in local/ below and are delivered at deploy time via
-# CONFIG_JSON or a mount at /app/config/agent_config.json.
-local/
+# AUTH_SERVICE_URL/model/instructions and never dies at import.
+#
+# local.agent_config.json is config layer 3: gitignored, local-dev only, and
+# absent in any real deployment. It fills what the blanked baked-in config
+# leaves empty, so a developer gets real credentials without the image ever
+# carrying them. Deployments supply the same values via CONFIG_JSON or a mount
+# at /app/config/agent_config.json instead.
+local.agent_config.json
 wake_test_out.log
 .claude/
