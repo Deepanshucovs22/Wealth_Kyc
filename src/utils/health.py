@@ -156,52 +156,49 @@ class HealthChecker:
     @otel_trace
     async def check_database_connectivity(self) -> ComponentHealth:
         """
-        Check database connectivity (if configured).
+        Check the KYC database the review tools read from.
+
+        This is the agent's only hard dependency — every tool in
+        src/tools/kyc_tools.py queries it directly — so an unreachable
+        database must surface here rather than only at request time.
 
         Returns:
             ComponentHealth with database status
         """
         try:
-            from src.config.settings import settings
+            from src.tools._db_client import KycDbError, fetch_one, _get_db_config
 
-            if not settings.postgres_connection_string:
-                return ComponentHealth(
-                    name="database",
-                    status=HealthStatus.HEALTHY,
-                    message="Database not configured (using in-memory storage)",
-                    details={"type": "in-memory"},
-                )
-
-            # Test PostgreSQL connection using psycopg (v3) — the driver
-            # installed by the postgresql feature (psycopg[binary]>=3.1.0).
             try:
-                import psycopg
-
-                async with await psycopg.AsyncConnection.connect(
-                    settings.postgres_connection_string
-                ) as conn:
-                    await conn.execute("SELECT 1")
-
+                cfg = _get_db_config()
+            except KycDbError as e:
                 return ComponentHealth(
                     name="database",
-                    status=HealthStatus.HEALTHY,
-                    message="Database connection successful",
+                    status=HealthStatus.UNHEALTHY,
+                    message=str(e),
                     details={"type": "postgresql"},
                 )
 
-            except ImportError:
+            try:
+                await fetch_one("SELECT 1 AS ok")
                 return ComponentHealth(
                     name="database",
                     status=HealthStatus.HEALTHY,
-                    message="PostgreSQL driver not installed (feature not selected)",
-                    details={"type": "in-memory"},
+                    message=(
+                        f"KYC database reachable at "
+                        f"{cfg['host']}:{cfg.get('port', 5432)}/{cfg['database']}"
+                    ),
+                    details={
+                        "type": "postgresql",
+                        "host": cfg["host"],
+                        "database": cfg["database"],
+                    },
                 )
-            except Exception as e:
+            except KycDbError as e:
                 logger.error(f"Database health check failed: {e}")
                 return ComponentHealth(
                     name="database",
                     status=HealthStatus.UNHEALTHY,
-                    message=f"Database connection failed: {str(e)}",
+                    message=str(e),
                     details={"type": "postgresql"},
                 )
 
@@ -318,6 +315,17 @@ class HealthChecker:
                 details={"enabled": metrics.enabled, "endpoint": "/metrics"},
             )
 
+        except ImportError:
+            # The prometheus feature was not selected for this agent, so
+            # src.utils.metrics doesn't exist. That's a configuration choice,
+            # not a failure — reporting it as unhealthy would peg /health at
+            # "degraded" forever and bury real problems.
+            return ComponentHealth(
+                name="metrics",
+                status=HealthStatus.HEALTHY,
+                message="Metrics not enabled (feature not selected)",
+                details={"enabled": False},
+            )
         except Exception as e:
             logger.error(f"Metrics health check error: {e}")
             return ComponentHealth(
@@ -362,6 +370,15 @@ class HealthChecker:
                 },
             )
 
+        except ImportError:
+            # Same as metrics above: the rate-limiting feature was not selected,
+            # so src.middleware.rate_limiting doesn't exist. Not a failure.
+            return ComponentHealth(
+                name="rate_limiter",
+                status=HealthStatus.HEALTHY,
+                message="Rate limiting not enabled (feature not selected)",
+                details={"enabled": False},
+            )
         except Exception as e:
             logger.error(f"Rate limiter health check error: {e}")
             return ComponentHealth(

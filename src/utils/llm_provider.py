@@ -7,6 +7,7 @@ Supports multiple LLM providers:
 - Google (Gemini Pro, Gemini 1.5 Pro, etc.)
 """
 
+import json
 import os
 from typing import Optional, Union
 from enum import Enum
@@ -43,22 +44,64 @@ def _get_litellm_config():
 
 
 @otel_trace
-def _get_vertex_credentials():
-    """Load the GCP service account credentials configured via GCP_SERVICE_ACCOUNT_JSON.
+def _get_gcp_config():
+    """Get GCP configuration from config.secrets.gcp"""
+    global _cached_config
 
-    Returns (credentials, project_id), or (None, None) if unset — callers treat
-    that as "no service account configured, use other auth methods instead."
+    if _cached_config is None:
+        _cached_config = load_agent_config()
+
+    return get_secrets("default", _cached_config).get("gcp", {})
+
+
+@otel_trace
+def _get_vertex_credentials():
+    """Load the GCP service account credentials used for Vertex AI.
+
+    Primary source is config.secrets.gcp.service_account — the key material lives
+    in agent_config.json alongside the other secrets (db/litellm), so the container
+    needs no mounted key file. GCP_SERVICE_ACCOUNT_JSON remains supported as a path
+    to a key file for local runs that would rather not inline the key.
+
+    Returns (credentials, project_id), or (None, None) when neither is configured —
+    callers treat that as "no service account, use other auth methods instead."
     """
     global _cached_vertex_credentials
     if _cached_vertex_credentials is None:
+        _cached_vertex_credentials = (None, None)
+
+        sa_info = _get_gcp_config().get("service_account")
+        # CAMS may deliver the block as a JSON string rather than a nested object.
+        if isinstance(sa_info, str) and sa_info.strip():
+            try:
+                sa_info = json.loads(sa_info)
+            except json.JSONDecodeError as e:
+                logger.error(f"secrets.gcp.service_account is not valid JSON: {e}")
+                sa_info = None
+
         sa_path = settings.gcp_service_account_json
-        if not sa_path:
-            _cached_vertex_credentials = (None, None)
-        else:
-            credentials = service_account.Credentials.from_service_account_file(
-                sa_path, scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-            _cached_vertex_credentials = (credentials, credentials.project_id)
+
+        try:
+            if isinstance(sa_info, dict) and sa_info.get("private_key"):
+                credentials = service_account.Credentials.from_service_account_info(
+                    sa_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                logger.debug(
+                    "Loaded Vertex AI service account from config.secrets.gcp.service_account "
+                    f"({sa_info.get('client_email', 'unknown')})"
+                )
+                _cached_vertex_credentials = (credentials, credentials.project_id)
+            elif sa_path:
+                credentials = service_account.Credentials.from_service_account_file(
+                    sa_path, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                logger.debug(f"Loaded Vertex AI service account from file: {sa_path}")
+                _cached_vertex_credentials = (credentials, credentials.project_id)
+        except Exception as e:
+            # Never let a bad/incomplete key take the agent down — get_google_llm()
+            # falls back to the LiteLLM gateway when this returns (None, None).
+            logger.error(f"Failed to load Vertex AI service account credentials: {e}")
+
     return _cached_vertex_credentials
 
 
