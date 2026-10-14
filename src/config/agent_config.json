@@ -127,7 +127,7 @@
       "litellm": {
         "enabled": true,
         "base_url": "https://cams-litellm.dev.cams.covasant.io/v2",
-        "api_key": ""
+        "api_key": "sk-1234"
       },
       "gcp": {
         "service_account": {
