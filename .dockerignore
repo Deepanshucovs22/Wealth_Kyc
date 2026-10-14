@@ -12,6 +12,11 @@ venv/
 .env
 .env.local
 
+# Real credential-bearing config — never goes into the build context, so the
+# image only ever bakes the blanked src/config/agent_config.json. Mount this
+# at /app/config/agent_config.json (or pass CONFIG_JSON) to run locally.
+local/
+
 # Git
 .git/
 .gitignore

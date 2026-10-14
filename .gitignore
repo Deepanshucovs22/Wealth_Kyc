@@ -9,6 +9,11 @@ venv/
 dist/
 build/
 .pytest_cache/
-src/config/agent_config.json
+# src/config/agent_config.json IS committed, but with every credential field
+# blanked — it is the fallback layer the image bakes in so a pod always has
+# AUTH_SERVICE_URL/model/instructions and never dies at import. The real
+# values live in local/ below and are delivered at deploy time via
+# CONFIG_JSON or a mount at /app/config/agent_config.json.
+local/
 wake_test_out.log
 .claude/
