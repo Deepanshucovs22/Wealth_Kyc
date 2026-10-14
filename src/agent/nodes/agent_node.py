@@ -70,14 +70,27 @@ class AgentNode:
             try:
                 self.provider = get_provider_from_model(self.model)
             except ValueError:
-                logger.warning(f"Could not infer provider for model {self.model}, defaulting to openai")
-                self.provider = "openai"
+                # "google", not "openai": the LiteLLM gateway serves no gpt-*
+                # models, so an openai default here would pair an un-inferable
+                # model with a provider the gateway can't satisfy.
+                logger.warning(f"Could not infer provider for model {self.model}, defaulting to google")
+                self.provider = "google"
 
         self.llm = get_llm_model(
             provider=self.provider,
             model_name=self.model,
             temperature=self.temperature,
-            streaming=True,
+            # streaming=False deliberately: this node only ever .ainvoke()s the
+            # model (never .astream()), and ainvoke on a streaming=True client
+            # still goes out over the SSE endpoint and re-aggregates internally —
+            # so no token-level streaming reaches the caller either way (the
+            # executor sends the fully-assembled response through the A2A event
+            # queue). Inside a pod, an egress/sidecar proxy can buffer or drop
+            # that SSE response, which arrives as a zero-chunk stream and fails
+            # as "No generations found in stream" — a failure that never
+            # reproduces locally. The plain completion endpoint is not subject
+            # to it. Unrelated to STREAMING_ENABLED / A2A protocol streaming.
+            streaming=False,
             max_tokens=self.max_tokens,
         )
 

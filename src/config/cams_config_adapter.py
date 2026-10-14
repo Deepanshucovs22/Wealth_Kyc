@@ -166,13 +166,22 @@ class CAMSConfigAdapter:
         agent_name = agent_config.get("agent_name", "CAMS Agent")
         instructions = agent_config.get("instructions", "You are a helpful AI assistant.")
         llm_config = agent_config.get("llm_config", {}) or {}
-        llm_provider = agent_config.get("llm_provider") or "openai"
+        # Last-resort defaults must name a model the LiteLLM gateway actually
+        # SERVES. The gateway serves no gpt-* models, so the stock scaffold's
+        # "gpt-4o"/"openai" fallback turns a merely-unset model into a hard
+        # 500 "Invalid model name passed in model=gpt-4o" at /agent/run —
+        # which reads like a broken gateway rather than a missing config.
+        # _extract_from_cams_v2 above is careful to leave model/provider absent
+        # so the baked-in config fills them; these defaults only apply when no
+        # layer supplied one at all, and must stay consistent with the baked-in
+        # agent_config.json.
+        llm_provider = agent_config.get("llm_provider") or "google"
 
         # `.get(key, default)` only applies `default` when the key is ABSENT — a key
         # present with value None (e.g. a cams_v2 export that left model unset and had
         # no baked-in fallback to fill it) would otherwise slip through as None. Use
         # `or` so a genuinely unset value always resolves to a real default.
-        model = llm_config.get("model") or "gpt-4o"
+        model = llm_config.get("model") or "gemini/gemini-2.5-flash"
         temperature = llm_config.get("temperature")
         temperature = temperature if temperature is not None else 0.3
         max_tokens_raw = llm_config.get("max_tokens")
