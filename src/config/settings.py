@@ -10,6 +10,12 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 
 
+# Env vars the hosting platform owns rather than this agent's config. Compared
+# case-insensitively, since the config's env block spells these lowercase
+# ("port"/"host") while a platform injects them uppercase.
+_PLATFORM_OWNED_ENV = {"PORT", "HOST"}
+
+
 def _deep_fill_missing(base: dict, fallback: dict) -> None:
     """
     Fill keys in `base` that are absent, None, or "" from `fallback`, recursively
@@ -89,7 +95,23 @@ def _apply_config_env() -> None:
     value uses setdefault so it never clobbers a genuinely platform-injected
     secret."""
     for key, value in _load_config_secrets_env().items():
-        if value not in (None, ""):
+        if key.upper() in _PLATFORM_OWNED_ENV:
+            # HOST/PORT are the one legitimate exception to config-wins. They are
+            # not ambient platform junk — they are the platform TELLING the app
+            # where to bind, and the Service/ingress routes to that same port.
+            # Overriding an injected PORT makes the app bind somewhere nothing
+            # routes to: the pod runs and never crashes, but every request gets
+            # 502 and the deploy health gate never goes green.
+            #
+            # Check BOTH spellings before defaulting: env vars are case-sensitive
+            # on Linux, the config spells these lowercase ("port") and platforms
+            # inject them uppercase ("PORT"). A plain setdefault(key) would write
+            # a lowercase "port" alongside the platform's "PORT", leaving two
+            # different values that pydantic's case-insensitive lookup picks
+            # between arbitrarily — which is how the injected port got ignored.
+            if key not in os.environ and key.upper() not in os.environ:
+                os.environ[key] = str(value)
+        elif value not in (None, ""):
             os.environ[key] = str(value)
         else:
             os.environ.setdefault(key, "")
